@@ -1,0 +1,96 @@
+{
+  "expo": {
+    "name": "Nexmarket",
+    "slug": "nexmarket-cliente",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "nexmarket",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#58CC02"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.nexmarket.cliente",
+      "usesAppleSignIn": true,
+      "config": {
+        "googleMapsApiKey": "YOUR_GOOGLE_MAPS_API_KEY"
+      },
+      "infoPlist": {
+        "UIBackgroundModes": ["remote-notification"],
+        "NSLocationWhenInUseUsageDescription": "Usamos sua localização para encontrar lojas próximas e validar seu endereço de entrega.",
+        "NSCameraUsageDescription": "Usamos a câmera para a foto do seu perfil e avaliações de produtos.",
+        "NSPhotoLibraryUsageDescription": "Usamos suas fotos para o perfil e para registrar avaliações."
+      }
+    },
+    "android": {
+      "package": "com.nexmarket.cliente",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#58CC02"
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "POST_NOTIFICATIONS",
+        "VIBRATE"
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "YOUR_GOOGLE_MAPS_API_KEY"
+        }
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-apple-authentication",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Usamos sua localização para encontrar lojas próximas e validar seu endereço de entrega."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Usamos suas fotos para o perfil e avaliações.",
+          "cameraPermission": "Usamos a câmera para o perfil e avaliações."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#58CC02"
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#58CC02",
+          "image": "./assets/splash.png",
+          "imageWidth": 200
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "googleAuth": {
+        "expoClientId": "YOUR_EXPO_GOOGLE_CLIENT_ID",
+        "iosClientId": "YOUR_IOS_GOOGLE_CLIENT_ID",
+        "androidClientId": "YOUR_ANDROID_GOOGLE_CLIENT_ID",
+        "webClientId": "YOUR_WEB_GOOGLE_CLIENT_ID"
+      }
+    }
+  }
+}

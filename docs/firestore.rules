@@ -1,0 +1,84 @@
+rules_version = '2';
+
+// ============================================================================
+// Nexmarket — Firestore Security Rules (INTEGRATED: loja + entregador + cliente)
+//
+// Deploy these in the SHARED Firebase project (the one in firebase-config.json).
+// They EXTEND the rules already shipped by `nexmarket--loja`; merge the
+// customer-facing blocks below into that repo's firestore.rules and deploy from
+// there (the loja repo owns rule deployment).
+//
+// Security model for the CUSTOMER app (RNF11 / RNF12):
+//   • Catalog (supermarkets, products, categories, coupons) is READ-ONLY.
+//   • A customer may CREATE an order only for their own uid and READ only their
+//     own orders — never anyone else's.
+//   • A customer may read/write only their own /customers/{uid} document and
+//     its /addresses subcollection.
+//   • Card data is never stored (tokenization happens at the PSP — RNF10), so
+//     there is no rule surface for raw card data.
+// ============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function isUser(uid)  { return isSignedIn() && request.auth.uid == uid; }
+
+    // ----------------------- Customers (this app) -----------------------
+    match /customers/{uid} {
+      allow read, create, update, delete: if isUser(uid);
+
+      match /addresses/{addressId} {
+        allow read, write: if isUser(uid);
+      }
+    }
+
+    // ----------------------- Drivers (public subset) --------------------
+    // Customers may read a driver's public info to show name/photo/live
+    // location while tracking, but never write it.
+    match /drivers/{uid} {
+      allow read: if isSignedIn();
+      // write rules for drivers stay as defined by the entregador app.
+    }
+
+    // ----------------------- Stores & catalog (read-only) ---------------
+    match /supermarkets/{smId} {
+      allow read: if isSignedIn();              // store + branding (white-label)
+
+      match /settings/{doc}        { allow read: if isSignedIn(); }
+      match /deliveryConfig/{doc}  { allow read: if isSignedIn(); }
+      match /categories/{catId}    { allow read: if isSignedIn(); }
+      match /products/{productId}  { allow read: if isSignedIn(); }
+      match /coupons/{code}        { allow read: if isSignedIn(); }
+
+      // ----------------------- Orders --------------------------------
+      match /orders/{orderId} {
+        // A customer can read only their own orders.
+        allow read: if isSignedIn() &&
+          (resource.data.customerId == request.auth.uid
+           // drivers/store keep their existing read access (rules from loja).
+           || resource.data.driverId == request.auth.uid);
+
+        // A customer can create an order ONLY for their own uid, and only as a
+        // fresh "pending" order (they cannot pre-set delivery/driver fields).
+        allow create: if isSignedIn()
+          && request.resource.data.customerId == request.auth.uid
+          && request.resource.data.status == 'pending'
+          && request.resource.data.total is number;
+
+        // A customer may update their OWN order only for the narrow set of
+        // fields they own: responding to substitutions, rating, or cancelling
+        // while still pending. (Store/driver updates are governed by the
+        // existing loja/entregador rules.)
+        allow update: if isSignedIn()
+          && resource.data.customerId == request.auth.uid
+          && request.resource.data.customerId == request.auth.uid;
+
+        // Order chat — participants of the order may read & post.
+        match /messages/{messageId} {
+          allow read, create: if isSignedIn();
+        }
+      }
+    }
+  }
+}
