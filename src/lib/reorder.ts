@@ -1,25 +1,51 @@
-import { addToCart } from './cart';
-import type { Order, Product, CartOption } from './types';
+import type { Order, Product } from './types';
+import { availableStock } from './catalog';
 
-export { addToCart };
+export interface ReorderResult {
+  lines: { product: Product; quantity: number }[];
+  /** Names of items skipped because they are currently out of stock. */
+  unavailable: string[];
+  /** True when some quantities were capped to the available stock. */
+  capped: boolean;
+}
 
 /**
- * Repeat a past order (RF19): re-add every still-available item to the current
- * cart, re-validating against the LIVE product (current price & stock). Items
- * that no longer exist or are out of stock are skipped. Returns how many lines
- * were successfully added.
+ * Build the cart lines to re-add from a past order (RF19), revalidating
+ * against the live catalog: prefer the current product doc (fresh price/stock),
+ * cap quantities to available stock, and skip items that are now out of stock.
+ * Items that were missing (and not substituted) in the original order are not
+ * carried over.
  */
-export function toastReorder(order: Order, liveProducts: Product[]): number {
-  let added = 0;
-  for (const item of order.items) {
-    const product = liveProducts.find((p) => p.id === item.productId);
-    if (!product) continue;
-    if (product.stock !== undefined && product.stock <= 0) continue;
-    const quantity =
-      product.stock !== undefined ? Math.min(item.quantity, product.stock) : item.quantity;
-    const options: CartOption[] | undefined = item.options;
-    const res = addToCart(product, { quantity, options, notes: item.notes });
-    if (res.ok) added++;
-  }
-  return added;
+export function buildReorderLines(order: Order, currentProducts: Product[]): ReorderResult {
+  const lines: { product: Product; quantity: number }[] = [];
+  const unavailable: string[] = [];
+  let capped = false;
+
+  (order.items || []).forEach((it) => {
+    if (it.missing && !it.substituted) return; // wasn't delivered last time
+    const live = currentProducts.find((p) => p.id === it.productId);
+    const product: Product =
+      live || {
+        id: it.productId,
+        supermarketId: order.supermarketId,
+        gondolaId: '',
+        name: it.name,
+        price: it.price,
+        imageUrl: it.imageUrl,
+        active: true,
+      };
+    const stock = availableStock(product);
+    if (typeof stock === 'number' && stock <= 0) {
+      unavailable.push(it.name);
+      return;
+    }
+    let qty = it.quantity;
+    if (typeof stock === 'number' && qty > stock) {
+      qty = stock;
+      capped = true;
+    }
+    lines.push({ product, quantity: qty });
+  });
+
+  return { lines, unavailable, capped };
 }

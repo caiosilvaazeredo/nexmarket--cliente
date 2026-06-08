@@ -1,96 +1,93 @@
-/**
- * Lightweight fuzzy search (RF06) — no external dependency.
- *
- * Handles accents, case, and typos via a normalized Levenshtein distance so
- * "reineken" still matches "Heineken" and "tomate" matches "Tomate Italiano".
- * Good enough for client-side filtering of a single store's catalog; for very
- * large catalogs the same scoring can run server-side later.
- */
-import type { Product } from './types';
+import type { Product, Gondola } from './types';
 
+/** Normalize a string: lowercase, strip accents & non-alphanumerics. */
 export function normalize(s: string): string {
   return (s || '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/[^a-z0-9]/gi, '');
 }
 
-function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  const prev = new Array(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    let prevDiag = prev[0];
-    prev[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const tmp = prev[j];
-      prev[j] = Math.min(
-        prev[j] + 1,
-        prev[j - 1] + 1,
-        prevDiag + (a[i - 1] === b[j - 1] ? 0 : 1),
-      );
-      prevDiag = tmp;
-    }
-  }
-  return prev[b.length];
-}
-
-/** 0 (no match) … 1 (perfect). Token-aware with fuzzy tolerance. */
-export function matchScore(query: string, product: Product): number {
+/**
+ * Subsequence fuzzy match (tolerant to typos / extra chars), ported from the
+ * loja storefront and made accent-insensitive (RF06).
+ */
+export function fuzzyMatch(query: string, target: string): boolean {
   const q = normalize(query);
-  if (!q) return 1;
-  const haystack = normalize(
-    [product.name, product.brand, product.categoryName, ...(product.tags || [])]
-      .filter(Boolean)
-      .join(' '),
-  );
-  if (!haystack) return 0;
-
-  if (haystack.includes(q)) return 1;
-
-  const qTokens = q.split(' ');
-  const hTokens = haystack.split(' ');
-  let total = 0;
-  for (const qt of qTokens) {
-    let best = 0;
-    for (const ht of hTokens) {
-      if (ht.includes(qt) || qt.includes(ht)) {
-        best = Math.max(best, 0.9);
-        continue;
-      }
-      const dist = levenshtein(qt, ht);
-      const tol = qt.length <= 4 ? 1 : 2; // allow more typos on longer words
-      if (dist <= tol) best = Math.max(best, 1 - dist / Math.max(qt.length, ht.length));
-    }
-    total += best;
+  const t = normalize(target);
+  if (!q) return true;
+  if (t.includes(q)) return true;
+  let qIdx = 0;
+  for (let i = 0; i < t.length && qIdx < q.length; i++) {
+    if (t[i] === q[qIdx]) qIdx++;
   }
-  return total / qTokens.length;
+  return qIdx === q.length;
 }
 
-export function searchProducts(query: string, products: Product[], threshold = 0.45): Product[] {
-  if (!query.trim()) return products;
-  return products
-    .map((p) => ({ p, s: matchScore(query, p) }))
-    .filter((x) => x.s >= threshold)
-    .sort((a, b) => b.s - a.s)
-    .map((x) => x.p);
+export interface ProductFilters {
+  gondolaId?: string | null;
+  brand?: string | null;
+  onlyPromo?: boolean;
+  tags?: string[]; // diet / vegano / etc.
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  sort?: 'relevance' | 'price_asc' | 'price_desc' | 'name';
 }
 
-/** Suggest the closest single product name when nothing matches well ("Você quis dizer…"). */
-export function didYouMean(query: string, products: Product[]): string | null {
-  const q = normalize(query);
-  if (!q) return null;
-  let best: { name: string; dist: number } | null = null;
-  for (const p of products) {
-    for (const token of normalize(p.name).split(' ')) {
-      const dist = levenshtein(q.split(' ')[0], token);
-      if (best === null || dist < best.dist) best = { name: p.name, dist };
+/** Filter + search the catalog (RF06, RF07). */
+export function filterProducts(
+  products: Product[],
+  search: string,
+  filters: ProductFilters,
+  gondolas: Gondola[],
+  isPromo: (p: Product) => boolean,
+): Product[] {
+  const gondolaName = (id?: string) => gondolas.find((g) => g.id === id)?.name || '';
+  let list = products.filter((p) => {
+    if (p.active === false) return false;
+    if (filters.gondolaId && p.gondolaId !== filters.gondolaId) return false;
+    if (filters.brand && (p.brand || '').toLowerCase() !== filters.brand.toLowerCase()) return false;
+    if (filters.onlyPromo && !isPromo(p)) return false;
+    if (filters.minPrice != null && p.price < filters.minPrice) return false;
+    if (filters.maxPrice != null && p.price > filters.maxPrice) return false;
+    if (filters.tags && filters.tags.length) {
+      const pt = (p.tags || []).map((t) => normalize(t));
+      if (!filters.tags.every((t) => pt.includes(normalize(t)))) return false;
     }
+    if (search) {
+      const haystack = [p.name, p.brand, p.subcategory, gondolaName(p.gondolaId), ...(p.tags || [])]
+        .filter(Boolean)
+        .join(' ');
+      if (!fuzzyMatch(search, haystack)) return false;
+    }
+    return true;
+  });
+
+  switch (filters.sort) {
+    case 'price_asc':
+      list = list.slice().sort((a, b) => a.price - b.price);
+      break;
+    case 'price_desc':
+      list = list.slice().sort((a, b) => b.price - a.price);
+      break;
+    case 'name':
+      list = list.slice().sort((a, b) => a.name.localeCompare(b.name));
+      break;
   }
-  return best && best.dist <= 3 ? best.name : null;
+  return list;
+}
+
+/** Distinct brands present in the catalog (for the filter chips). */
+export function collectBrands(products: Product[]): string[] {
+  const set = new Set<string>();
+  products.forEach((p) => p.brand && set.add(p.brand));
+  return Array.from(set).sort();
+}
+
+/** Distinct dietary tags present in the catalog. */
+export function collectTags(products: Product[]): string[] {
+  const set = new Set<string>();
+  products.forEach((p) => (p.tags || []).forEach((t) => set.add(t)));
+  return Array.from(set).sort();
 }

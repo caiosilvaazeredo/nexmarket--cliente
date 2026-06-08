@@ -1,177 +1,170 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, Image, ScrollView, Pressable, Alert } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, ScrollView, Image, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ChevronLeft, Heart, Minus, Plus, ImageOff, Leaf, Check } from 'lucide-react-native';
+import { ArrowLeft, Heart, Package, Plus, Minus, ShoppingCart, Leaf, Star } from 'lucide-react-native';
 
+import { Button } from '../../src/components/ui/Button';
 import { useColors } from '../../src/hooks/useColors';
 import { font, fontSize, radius, spacing, shadow } from '../../src/lib/theme';
 import { brl } from '../../src/lib/format';
-import { Button } from '../../src/components/ui/Button';
-import { Badge } from '../../src/components/ui/Badge';
-import { useStore } from '../../src/store/useStore';
-import { useCatalog } from '../../src/hooks/useCatalog';
-import { getProduct, onSale, inStock } from '../../src/lib/catalog';
-import { addToCart } from '../../src/lib/cart';
+import { useAppStore } from '../../src/store/useAppStore';
+import { useCartStore } from '../../src/store/useCartStore';
+import { effectiveUnitPrice, promoBadge, getRulePromotion } from '../../src/lib/promotions';
+import { availableStock } from '../../src/lib/catalog';
 import { toggleFavorite } from '../../src/lib/customers';
-import { toast } from '../../src/components/ProductCard';
-import type { Product, CartOption } from '../../src/lib/types';
+import { warnHaptic } from '../../src/lib/notifications';
 
 export default function ProductDetail() {
   const { colors } = useColors();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const supermarket = useStore((s) => s.supermarket);
-  const customer = useStore((s) => s.customer);
-  const { products } = useCatalog();
 
-  const [product, setProduct] = useState<Product | null>(products.find((p) => p.id === id) || null);
-  const [qty, setQty] = useState(1);
-  const [selected, setSelected] = useState<Record<string, string>>({});
+  const product = useAppStore((s) => s.products.find((p) => p.id === id));
+  const promotions = useAppStore((s) => s.promotions);
+  const gondolas = useAppStore((s) => s.gondolas);
+  const authUser = useAppStore((s) => s.authUser);
+  const customer = useAppStore((s) => s.customer);
 
-  useEffect(() => {
-    if (!product && id && supermarket) getProduct(supermarket.id, id).then(setProduct);
-  }, [id, supermarket?.id]);
+  const qty = useCartStore((s) => s.lines.find((l) => l.product.id === id)?.quantity || 0);
+  const { addItem, tryAddItem, replaceWith, totalCount } = useCartStore();
+
+  const [localQty, setLocalQty] = useState(1);
 
   if (!product) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ color: colors.textMuted, fontWeight: font.semibold }}>Carregando produto…</Text>
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+        <Package size={48} color={colors.textSubtle} />
+        <Text style={{ color: colors.textMuted, fontWeight: font.bold }}>Produto não encontrado.</Text>
+        <Button label="Voltar" variant="ghost" fullWidth={false} onPress={() => router.back()} />
       </SafeAreaView>
     );
   }
 
-  const sale = onSale(product);
-  const available = inStock(product);
-  const isFav = customer?.favorites?.includes(product.id) ?? false;
+  const unitPrice = effectiveUnitPrice(product, promotions);
+  const badge = promoBadge(product, promotions);
+  const rule = getRulePromotion(product, promotions);
+  const hasPromo = unitPrice < product.price - 0.001;
+  const gondola = gondolas.find((g) => g.id === product.gondolaId);
+  const stock = availableStock(product);
+  const outOfStock = typeof stock === 'number' && stock <= 0;
+  const isFav = customer?.favorites?.includes(product.id);
 
-  const optionDelta = (product.options || []).reduce((sum, g) => {
-    const choiceId = selected[g.id];
-    const choice = g.choices.find((c) => c.id === choiceId);
-    return sum + (choice?.priceDelta || 0);
-  }, 0);
-  const unitPrice = product.price + optionDelta;
-
-  const requiredMissing = (product.options || []).some((g) => g.required && !selected[g.id]);
-
-  const handleAdd = () => {
-    if (requiredMissing) {
-      toast('Escolha as opções obrigatórias.');
+  const add = () => {
+    if (outOfStock) return;
+    if (typeof stock === 'number' && qty + localQty > stock) {
+      warnHaptic();
+      Alert.alert('Estoque máximo', `Só temos ${stock} unidade(s) disponível.`);
       return;
     }
-    const doAdd = () => {
-      const options: CartOption[] = (product.options || [])
-        .map((g) => {
-          const choice = g.choices.find((c) => c.id === selected[g.id]);
-          if (!choice) return null;
-          return { groupId: g.id, groupName: g.name, choiceId: choice.id, choiceName: choice.name, priceDelta: choice.priceDelta || 0 };
-        })
-        .filter(Boolean) as CartOption[];
-      const res = addToCart(product, { quantity: qty, options });
-      if (!res.ok && res.reason === 'stock') {
-        toast('Quantidade acima do estoque disponível.');
-      } else {
-        toast('Adicionado ao carrinho ✓');
-        router.back();
-      }
-    };
-    if (product.ageRestricted) {
-      Alert.alert('Confirmação de idade', 'Este produto é destinado a maiores de 18 anos. Você confirma ter 18 anos ou mais?', [
-        { text: 'Não', style: 'cancel' },
-        { text: 'Sim, tenho 18+', onPress: doAdd },
+    const ok = tryAddItem(product, localQty);
+    if (!ok) {
+      Alert.alert('Trocar de loja?', 'Seu carrinho tem itens de outra loja. Esvaziar e começar um novo carrinho?', [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Trocar', style: 'destructive', onPress: () => replaceWith(product, localQty) },
       ]);
-    } else {
-      doAdd();
     }
   };
 
-  const notifyMe = () => toast('Avisaremos quando este produto voltar ao estoque. 🔔');
+  const fav = () => {
+    if (!authUser || !customer) {
+      Alert.alert('Entrar', 'Faça login para salvar favoritos.', [
+        { text: 'Agora não', style: 'cancel' },
+        { text: 'Entrar', onPress: () => router.push('/(auth)/login') },
+      ]);
+      return;
+    }
+    toggleFavorite(authUser.uid, customer, product.id).catch(() => {});
+  };
+
+  const nutrition = product.nutrition && Object.keys(product.nutrition).length ? product.nutrition : null;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
-      {/* Top bar */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm }}>
-        <Pressable onPress={() => router.back()} style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.card, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
-          <ChevronLeft size={24} color={colors.text} />
+      {/* Header */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
+        <Pressable onPress={() => router.back()} hitSlop={10} style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.card, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
+          <ArrowLeft size={22} color={colors.text} />
         </Pressable>
-        {!useStore.getState().authUser?.isAnonymous && (
-          <Pressable onPress={() => toggleFavorite(customer!.uid, product.id, !isFav)} style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.card, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
-            <Heart size={20} color={isFav ? colors.danger : colors.textMuted} fill={isFav ? colors.danger : 'transparent'} />
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Pressable onPress={fav} hitSlop={10} style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.card, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
+            <Heart size={20} color={isFav ? colors.danger : colors.text} fill={isFav ? colors.danger : 'transparent'} />
           </Pressable>
-        )}
+          <Pressable onPress={() => router.push('/cart')} hitSlop={10} style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.card, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
+            <ShoppingCart size={20} color={colors.text} />
+            {totalCount() > 0 ? (
+              <View style={{ position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: colors.danger, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 }}>
+                <Text style={{ color: '#fff', fontSize: 10, fontWeight: font.black }}>{totalCount()}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+        </View>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 140, gap: spacing.md }} showsVerticalScrollIndicator={false}>
         {/* Image */}
-        <View style={{ height: 280, borderRadius: radius['2xl'], backgroundColor: colors.card, borderWidth: 2, borderColor: colors.border, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
+        <View style={{ height: 260, borderRadius: radius['2xl'], backgroundColor: colors.card, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
           {product.imageUrl ? (
-            <Image source={{ uri: product.imageUrl }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+            <Image source={{ uri: product.imageUrl }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
           ) : (
-            <ImageOff size={48} color={colors.textSubtle} />
+            <Package size={64} color={colors.textSubtle} />
           )}
-          {sale && (
-            <View style={{ position: 'absolute', top: 12, left: 12 }}>
-              <Badge label={`${product.discountPercent ?? 0}% OFF`} fg="#FFFFFF" bg={colors.danger} />
+          {badge ? (
+            <View style={{ position: 'absolute', top: 12, left: 12, backgroundColor: colors.danger, paddingHorizontal: 12, paddingVertical: 5, borderRadius: radius.full }}>
+              <Text style={{ color: '#fff', fontWeight: font.black, fontSize: fontSize.sm }}>{badge.label}</Text>
             </View>
-          )}
+          ) : null}
         </View>
 
-        {/* Title + price */}
-        <View style={{ gap: 6 }}>
-          {product.brand ? <Text style={{ color: colors.textSubtle, fontWeight: font.bold, fontSize: fontSize.xs, textTransform: 'uppercase' }}>{product.brand}</Text> : null}
-          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize['2xl'] }}>{product.name}</Text>
-          <Text style={{ color: colors.textMuted, fontWeight: font.medium }}>{product.unit}</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
-            {(product.tags || []).map((t) => (
-              <Badge key={t} label={t} fg={colors.primaryDark} bg={colors.primarySoft} small icon={t === 'vegano' ? <Leaf size={11} color={colors.primaryDark} /> : undefined} />
-            ))}
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 10, marginTop: 6 }}>
-            <Text style={{ color: sale ? colors.danger : colors.text, fontWeight: font.black, fontSize: fontSize['3xl'] }}>{brl(unitPrice)}</Text>
-            {sale && <Text style={{ color: colors.textSubtle, fontSize: fontSize.lg, textDecorationLine: 'line-through', fontWeight: font.medium, marginBottom: 4 }}>{brl(product.originalPrice)}</Text>}
-          </View>
+        {/* Tags */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+          {gondola ? <Tag label={gondola.name} colors={colors} /> : null}
+          {product.brand ? <Tag label={product.brand} colors={colors} /> : null}
+          {(product.tags || []).map((t) => (
+            <Tag key={t} label={t} colors={colors} leaf />
+          ))}
         </View>
+
+        {/* Name + price */}
+        <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize['2xl'] }}>{product.name}</Text>
+        <Text style={{ color: colors.textMuted, fontSize: fontSize.sm }}>
+          {product.unit || '1 unidade'}{product.ean ? ` • EAN ${product.ean}` : ''}
+        </Text>
+
+        <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10 }}>
+          <Text style={{ color: hasPromo ? colors.danger : colors.text, fontWeight: font.black, fontSize: fontSize['3xl'] }}>{brl(unitPrice)}</Text>
+          {hasPromo ? <Text style={{ color: colors.textSubtle, fontSize: fontSize.base, textDecorationLine: 'line-through' }}>{brl(product.price)}</Text> : null}
+        </View>
+        {rule && rule.type === 'quantity' && rule.requiredQuantity ? (
+          <View style={{ backgroundColor: colors.amberSoft, borderRadius: radius.md, padding: spacing.md }}>
+            <Text style={{ color: '#92400E', fontWeight: font.bold }}>
+              Leve {rule.requiredQuantity} por {brl(rule.value)}!
+            </Text>
+          </View>
+        ) : null}
+        {hasPromo && typeof product.lowestPrice30Days === 'number' ? (
+          <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs }}>
+            Menor preço nos últimos 30 dias: {brl(product.lowestPrice30Days)}
+          </Text>
+        ) : null}
 
         {/* Description */}
         {product.description ? (
           <View style={{ gap: 6 }}>
-            <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg }}>Descrição</Text>
-            <Text style={{ color: colors.textMuted, fontWeight: font.medium, lineHeight: 22 }}>{product.description}</Text>
+            <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.base }}>Descrição</Text>
+            <Text style={{ color: colors.textMuted, fontSize: fontSize.sm, lineHeight: 21 }}>{product.description}</Text>
           </View>
         ) : null}
 
-        {/* Options (RF: customization) */}
-        {(product.options || []).map((g) => (
-          <View key={g.id} style={{ gap: 8 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.base }}>{g.name}</Text>
-              {g.required ? <Badge label="Obrigatório" fg={colors.danger} bg={colors.dangerSoft} small /> : null}
-            </View>
-            {g.choices.map((c) => {
-              const active = selected[g.id] === c.id;
-              return (
-                <Pressable key={c.id} onPress={() => setSelected((s) => ({ ...s, [g.id]: c.id }))} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderRadius: radius.md, borderWidth: 2, borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.primarySoft : colors.card }}>
-                  <View style={{ width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: active ? colors.primary : colors.borderStrong, backgroundColor: active ? colors.primary : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
-                    {active && <Check size={14} color="#FFFFFF" strokeWidth={3} />}
-                  </View>
-                  <Text style={{ flex: 1, color: colors.text, fontWeight: font.semibold }}>{c.name}</Text>
-                  {c.priceDelta ? <Text style={{ color: colors.textMuted, fontWeight: font.bold }}>+ {brl(c.priceDelta)}</Text> : null}
-                </Pressable>
-              );
-            })}
-          </View>
-        ))}
-
-        {/* Nutrition (RF08) */}
-        {product.nutrition?.table?.length ? (
-          <View style={{ gap: 8 }}>
-            <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg }}>Tabela nutricional</Text>
-            {product.nutrition.servingSize ? <Text style={{ color: colors.textSubtle, fontWeight: font.medium, fontSize: fontSize.sm }}>Porção: {product.nutrition.servingSize} • {product.nutrition.calories}</Text> : null}
-            <View style={{ borderRadius: radius.md, borderWidth: 2, borderColor: colors.border, overflow: 'hidden' }}>
-              {product.nutrition.table.map((row, i) => (
-                <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', padding: 12, backgroundColor: i % 2 ? colors.cardMuted : colors.card }}>
-                  <Text style={{ color: colors.textMuted, fontWeight: font.medium }}>{row.label}</Text>
-                  <Text style={{ color: colors.text, fontWeight: font.bold }}>{row.value}</Text>
+        {/* Nutrition */}
+        {nutrition ? (
+          <View style={{ gap: 6 }}>
+            <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.base }}>Informação nutricional</Text>
+            <View style={{ borderRadius: radius.lg, borderWidth: 2, borderColor: colors.border, overflow: 'hidden' }}>
+              {Object.entries(nutrition).map(([k, v], i) => (
+                <View key={k} style={{ flexDirection: 'row', justifyContent: 'space-between', padding: spacing.sm, backgroundColor: i % 2 ? colors.cardMuted : colors.card }}>
+                  <Text style={{ color: colors.textMuted, fontWeight: font.medium }}>{k}</Text>
+                  <Text style={{ color: colors.text, fontWeight: font.bold }}>{v}</Text>
                 </View>
               ))}
             </View>
@@ -180,24 +173,38 @@ export default function ProductDetail() {
       </ScrollView>
 
       {/* Sticky add bar */}
-      <View style={[{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.card, borderTopWidth: 2, borderColor: colors.border, padding: spacing.lg, flexDirection: 'row', alignItems: 'center', gap: spacing.md }, shadow.raised]}>
-        {available ? (
+      <View style={[{ flexDirection: 'row', gap: spacing.md, padding: spacing.lg, backgroundColor: colors.card, borderTopWidth: 2, borderTopColor: colors.border, alignItems: 'center' }, shadow.raised]}>
+        {outOfStock ? (
+          <Button label="Produto esgotado" disabled style={{ flex: 1 }} />
+        ) : (
           <>
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.cardMuted, borderRadius: radius.full, borderWidth: 2, borderColor: colors.border }}>
-              <Pressable onPress={() => setQty((q) => Math.max(1, q - 1))} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
-                <Minus size={20} color={colors.text} strokeWidth={3} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, borderWidth: 2, borderColor: colors.border, overflow: 'hidden' }}>
+              <Pressable onPress={() => setLocalQty((q) => Math.max(1, q - 1))} style={{ paddingHorizontal: 14, paddingVertical: 14 }}>
+                <Minus size={18} color={colors.text} />
               </Pressable>
-              <Text style={{ minWidth: 28, textAlign: 'center', color: colors.text, fontWeight: font.black, fontSize: fontSize.lg }}>{qty}</Text>
-              <Pressable onPress={() => setQty((q) => (product.stock !== undefined ? Math.min(product.stock, q + 1) : q + 1))} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
-                <Plus size={20} color={colors.text} strokeWidth={3} />
+              <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg, minWidth: 28, textAlign: 'center' }}>{localQty}</Text>
+              <Pressable onPress={() => setLocalQty((q) => q + 1)} style={{ paddingHorizontal: 14, paddingVertical: 14 }}>
+                <Plus size={18} color={colors.text} />
               </Pressable>
             </View>
-            <Button label={`Adicionar • ${brl(unitPrice * qty)}`} size="lg" onPress={handleAdd} style={{ flex: 1 }} />
+            <Button
+              label={`Adicionar • ${brl(unitPrice * localQty)}`}
+              icon={<Plus size={18} color="#fff" strokeWidth={3} />}
+              style={{ flex: 1 }}
+              onPress={add}
+            />
           </>
-        ) : (
-          <Button label="Avise-me quando chegar" variant="secondary" size="lg" onPress={notifyMe} style={{ flex: 1 }} />
         )}
       </View>
     </SafeAreaView>
+  );
+}
+
+function Tag({ label, colors, leaf }: { label: string; colors: any; leaf?: boolean }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.cardMuted, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.full }}>
+      {leaf ? <Leaf size={12} color={colors.primary} /> : null}
+      <Text style={{ color: colors.textMuted, fontWeight: font.bold, fontSize: fontSize.xs }}>{label}</Text>
+    </View>
   );
 }

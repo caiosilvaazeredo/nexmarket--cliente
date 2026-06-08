@@ -1,78 +1,71 @@
-import type { SavedPaymentToken, PaymentMethod } from './types';
-
-/**
- * Payment tokenization (RNF10).
- *
- * Raw card data (PAN, CVV) is NEVER persisted in our database. In production
- * the card fields are sent straight to the PSP's SDK (Stripe / MercadoPago /
- * Pagar.me), which returns an opaque token; only that token + the brand/last4
- * are stored on the customer profile.
- *
- * This module is the seam where that SDK call happens. Here it's stubbed with a
- * local "tokenizer" so the checkout flow works end-to-end in development; swap
- * `tokenizeCard` for the real PSP call (e.g. mercadopago.createCardToken) when
- * wiring a live account.
- */
+import type { PaymentMethod } from './types';
 
 export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   pix: 'PIX',
-  card_online: 'Cartão (online)',
+  card_online: 'Cartão de crédito (online)',
   card_delivery: 'Cartão na entrega',
   cash_delivery: 'Dinheiro na entrega',
+  voucher_delivery: 'Vale-refeição na entrega',
 };
 
-export interface CardInput {
-  number: string;
-  holderName: string;
-  expMonth: string;
-  expYear: string;
-  cvv: string;
+export const PAYMENT_SHORT: Record<PaymentMethod, string> = {
+  pix: 'PIX',
+  card_online: 'Cartão online',
+  card_delivery: 'Cartão na entrega',
+  cash_delivery: 'Dinheiro',
+  voucher_delivery: 'Vale',
+};
+
+/** Format a card number as groups of 4 digits while typing. */
+export function maskCardNumber(raw: string): string {
+  return (raw || '')
+    .replace(/\D/g, '')
+    .slice(0, 16)
+    .replace(/(.{4})/g, '$1 ')
+    .trim();
 }
 
-function detectBrand(number: string): string {
-  const n = number.replace(/\D/g, '');
-  if (/^4/.test(n)) return 'visa';
-  if (/^(5[1-5]|2[2-7])/.test(n)) return 'master';
-  if (/^3[47]/.test(n)) return 'amex';
-  if (/^(636368|438935|504175|451416|5067|4576|4011|506699)/.test(n)) return 'elo';
-  if (/^606282/.test(n)) return 'hipercard';
-  return 'card';
+export function maskExpiry(raw: string): string {
+  const d = (raw || '').replace(/\D/g, '').slice(0, 4);
+  if (d.length <= 2) return d;
+  return `${d.slice(0, 2)}/${d.slice(2)}`;
 }
 
-export function validateCard(card: CardInput): string | null {
-  const n = card.number.replace(/\D/g, '');
-  if (n.length < 13) return 'Número do cartão inválido.';
-  if (!card.holderName.trim()) return 'Informe o nome impresso no cartão.';
-  if (!/^\d{2}$/.test(card.expMonth) || Number(card.expMonth) > 12) return 'Mês de validade inválido.';
-  if (!/^\d{2,4}$/.test(card.expYear)) return 'Ano de validade inválido.';
-  if (!/^\d{3,4}$/.test(card.cvv)) return 'CVV inválido.';
-  return null;
+/** Detect the card brand from the leading digits (display-only). */
+export function cardBrand(raw: string): string {
+  const n = (raw || '').replace(/\D/g, '');
+  if (/^4/.test(n)) return 'Visa';
+  if (/^(5[1-5]|2[2-7])/.test(n)) return 'Mastercard';
+  if (/^3[47]/.test(n)) return 'Amex';
+  if (/^(606282|3841|50)/.test(n)) return 'Elo';
+  return 'Cartão';
+}
+
+export function last4(raw: string): string {
+  const n = (raw || '').replace(/\D/g, '');
+  return n.slice(-4);
+}
+
+export interface CardToken {
+  token: string;
+  brand: string;
+  last4: string;
 }
 
 /**
- * Exchange card data for a provider token. PRODUCTION: replace the body with
- * the PSP SDK call. The plaintext card object never leaves this function.
+ * Tokenize a card. This is a gateway-ready stub: in production it calls the
+ * payment provider SDK (Stripe / Mercado Pago / Pagar.me) which returns an
+ * opaque token. The raw card number / CVV are NEVER sent to or stored in our
+ * own database (RNF10) — only the token (or nothing, for PIX/on-delivery).
  */
-export async function tokenizeCard(
-  card: CardInput,
-  provider: 'stripe' | 'mercadopago' | 'pagarme' = 'mercadopago',
-): Promise<SavedPaymentToken> {
-  const error = validateCard(card);
-  if (error) throw new Error(error);
-  const n = card.number.replace(/\D/g, '');
-  // Simulated tokenization — DO NOT ship this; call the PSP instead.
+export async function tokenizeCard(card: { number: string; cvv: string; expiry: string }): Promise<CardToken> {
+  // Simulated latency + token. Replace with the provider SDK call.
   await new Promise((r) => setTimeout(r, 600));
+  const digits = card.number.replace(/\D/g, '');
+  if (digits.length < 13) throw new Error('Número de cartão inválido.');
   return {
-    id: `tok_${Date.now()}`,
-    brand: detectBrand(n),
-    last4: n.slice(-4),
-    holderName: card.holderName.trim(),
-    token: `tok_${provider}_${Math.random().toString(36).slice(2)}`,
-    provider,
+    token: `tok_${Math.random().toString(36).slice(2, 14)}`,
+    brand: cardBrand(card.number),
+    last4: last4(card.number),
   };
-}
-
-export function maskCardNumber(raw: string): string {
-  const d = raw.replace(/\D/g, '').slice(0, 19);
-  return d.replace(/(.{4})/g, '$1 ').trim();
 }
