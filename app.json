@@ -4,7 +4,7 @@
     "slug": "nexmarket-cliente",
     "version": "1.0.0",
     "orientation": "portrait",
-    "scheme": "nexmarket",
+    "scheme": "nexcliente",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "icon": "./assets/icon.png",
@@ -22,10 +22,9 @@
         "googleMapsApiKey": "YOUR_GOOGLE_MAPS_API_KEY"
       },
       "infoPlist": {
-        "UIBackgroundModes": ["remote-notification"],
         "NSLocationWhenInUseUsageDescription": "Usamos sua localização para encontrar lojas próximas e validar seu endereço de entrega.",
-        "NSCameraUsageDescription": "Usamos a câmera para a foto do seu perfil e avaliações de produtos.",
-        "NSPhotoLibraryUsageDescription": "Usamos suas fotos para o perfil e para registrar avaliações."
+        "NSCameraUsageDescription": "Usamos a câmera para você anexar fotos em avaliações de produtos.",
+        "NSPhotoLibraryUsageDescription": "Usamos suas fotos para anexar imagens em avaliações e na sua conta."
       }
     },
     "android": {
@@ -59,8 +58,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Usamos suas fotos para o perfil e avaliações.",
-          "cameraPermission": "Usamos a câmera para o perfil e avaliações."
+          "photosPermission": "Usamos suas fotos para anexar imagens em avaliações.",
+          "cameraPermission": "Usamos a câmera para você anexar fotos em avaliações."
         }
       ],
       [
@@ -86,10 +85,10 @@
         "origin": false
       },
       "googleAuth": {
-        "expoClientId": "YOUR_EXPO_GOOGLE_CLIENT_ID",
-        "iosClientId": "YOUR_IOS_GOOGLE_CLIENT_ID",
-        "androidClientId": "YOUR_ANDROID_GOOGLE_CLIENT_ID",
-        "webClientId": "YOUR_WEB_GOOGLE_CLIENT_ID"
+        "expoClientId": "",
+        "iosClientId": "",
+        "androidClientId": "",
+        "webClientId": ""
       }
     }
   }

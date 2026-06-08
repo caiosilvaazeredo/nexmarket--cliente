@@ -1,38 +1,26 @@
 import React from 'react';
 import { View, Text } from 'react-native';
 import { useColors } from '../hooks/useColors';
-import { font, fontSize, spacing, radius } from '../lib/theme';
+import { font, fontSize, spacing } from '../lib/theme';
+import { Button } from './ui/Button';
 
-interface Props {
-  icon: React.ReactNode;
+interface EmptyStateProps {
+  icon?: React.ReactNode;
   title: string;
   subtitle?: string;
-  action?: React.ReactNode;
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
-export function EmptyState({ icon, title, subtitle, action }: Props) {
+/** Centered empty/placeholder state used across lists and screens. */
+export function EmptyState({ icon, title, subtitle, actionLabel, onAction }: EmptyStateProps) {
   const { colors } = useColors();
   return (
-    <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: spacing['3xl'], gap: spacing.md }}>
-      <View
-        style={{
-          width: 84,
-          height: 84,
-          borderRadius: radius['2xl'],
-          backgroundColor: colors.primarySoft,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        {icon}
-      </View>
-      <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl, textAlign: 'center' }}>{title}</Text>
-      {subtitle ? (
-        <Text style={{ color: colors.textMuted, fontWeight: font.medium, textAlign: 'center', paddingHorizontal: spacing.xl }}>
-          {subtitle}
-        </Text>
-      ) : null}
-      {action}
+    <View style={{ alignItems: 'center', justifyContent: 'center', gap: spacing.sm, paddingVertical: spacing['3xl'], paddingHorizontal: spacing.xl }}>
+      {icon}
+      <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg, textAlign: 'center' }}>{title}</Text>
+      {subtitle ? <Text style={{ color: colors.textMuted, textAlign: 'center' }}>{subtitle}</Text> : null}
+      {actionLabel && onAction ? <Button label={actionLabel} fullWidth={false} onPress={onAction} style={{ marginTop: spacing.sm }} /> : null}
     </View>
   );
 }

@@ -1,9 +1,13 @@
 /**
- * Design tokens ported 1:1 from the Nexmarket (loja) web app so the driver
- * app keeps the exact same "Duolingo-style" identity:
+ * Design tokens ported 1:1 from the Nexmarket (loja) web app and the
+ * entregador app so the three apps share the exact same "Duolingo-style"
+ * identity:
  *  - Bright green primary (#58CC02) with darker bottom borders for 3D buttons
  *  - Generous radii, bold typography, slate neutrals
- * High-contrast values are used everywhere for outdoor/sunlight legibility.
+ *
+ * The primary color is overridable at runtime by the store's white-label
+ * config (see lib/whitelabel.ts + hooks/useColors.ts) so each supermarket
+ * keeps its own brand identity (RNF01).
  */
 
 export const palette = {
@@ -172,3 +176,24 @@ export const shadow = {
     elevation: 8,
   },
 };
+
+/** Lighten/transparentize a hex color into an rgba "soft" tint. */
+export function softColor(hex: string, alpha = 0.15): string {
+  const h = hex.replace('#', '');
+  if (h.length !== 6) return `rgba(88,204,2,${alpha})`;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/** Darken a hex color by a factor (for the 3D button bottom border). */
+export function darkenColor(hex: string, factor = 0.82): string {
+  const h = hex.replace('#', '');
+  if (h.length !== 6) return '#58A700';
+  const r = Math.round(parseInt(h.slice(0, 2), 16) * factor);
+  const g = Math.round(parseInt(h.slice(2, 4), 16) * factor);
+  const b = Math.round(parseInt(h.slice(4, 6), 16) * factor);
+  const to2 = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${to2(r)}${to2(g)}${to2(b)}`;
+}

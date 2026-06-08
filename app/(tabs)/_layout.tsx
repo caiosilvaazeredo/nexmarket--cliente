@@ -4,10 +4,12 @@ import { Tabs } from 'expo-router';
 import { House, Search, Receipt, User } from 'lucide-react-native';
 import { useColors } from '../../src/hooks/useColors';
 import { font } from '../../src/lib/theme';
-import { useStore, selectCartCount } from '../../src/store/useStore';
+import { useAppStore, selectActiveOrders } from '../../src/store/useAppStore';
 
 export default function TabsLayout() {
   const { colors } = useColors();
+  const activeCount = useAppStore((s) => selectActiveOrders(s).length);
+
   return (
     <Tabs
       screenOptions={{
@@ -27,7 +29,35 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" options={{ title: 'Início', tabBarIcon: ({ color, size }) => <House color={color} size={size} /> }} />
       <Tabs.Screen name="search" options={{ title: 'Buscar', tabBarIcon: ({ color, size }) => <Search color={color} size={size} /> }} />
-      <Tabs.Screen name="orders" options={{ title: 'Pedidos', tabBarIcon: ({ color, size }) => <Receipt color={color} size={size} /> }} />
+      <Tabs.Screen
+        name="orders"
+        options={{
+          title: 'Pedidos',
+          tabBarIcon: ({ color, size }) => (
+            <View>
+              <Receipt color={color} size={size} />
+              {activeCount > 0 ? (
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: -4,
+                    right: -8,
+                    minWidth: 16,
+                    height: 16,
+                    borderRadius: 8,
+                    backgroundColor: colors.danger,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    paddingHorizontal: 3,
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontSize: 9, fontWeight: font.black }}>{activeCount}</Text>
+                </View>
+              ) : null}
+            </View>
+          ),
+        }}
+      />
       <Tabs.Screen name="profile" options={{ title: 'Perfil', tabBarIcon: ({ color, size }) => <User color={color} size={size} /> }} />
     </Tabs>
   );

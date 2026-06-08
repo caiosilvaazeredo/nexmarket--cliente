@@ -1,48 +1,146 @@
 /**
- * Shared data model for the Nexmarket CUSTOMER app.
+ * Shared data model. These types mirror the Firestore schema used by the
+ * Nexmarket (loja) + entregador apps so all three apps read/write the SAME
+ * database.
  *
- * These types mirror the SAME Firestore schema used by the manager app
- * (`nexmarket--loja`) and the driver app (`nexmarket--entregador`) so all three
- * apps read/write ONE integrated database (same Firebase project + named
- * Firestore database, see firebase-config.json).
- *
- * Collections (★ = written by this customer app):
- *   /supermarkets/{smId}                          -> Supermarket            (read)
- *   /supermarkets/{smId}/settings/storeInfo       -> StoreInfo / location   (read)
- *   /supermarkets/{smId}/deliveryConfig/main      -> DeliveryConfig         (read)
- *   /supermarkets/{smId}/categories/{catId}       -> Category (gôndola)     (read)
- *   /supermarkets/{smId}/products/{productId}     -> Product                (read)
- *   /supermarkets/{smId}/coupons/{code}           -> Coupon                 (read)
- *   /supermarkets/{smId}/orders/{orderId}       ★ -> Order                  (create + read own)
- *   /supermarkets/{smId}/orders/{id}/messages   ★ -> ChatMessage            (read + create)
- *   /customers/{uid}                            ★ -> CustomerProfile        (create/update own)
- *   /customers/{uid}/addresses/{addressId}      ★ -> Address                (own)
- *   /drivers/{uid}                                -> DriverProfile (public subset, read)
- *
- * See README "Integração & Schema" for the full contract and the Firestore
- * Security Rules that enforce this access model.
+ * Collections (customer-relevant):
+ *   /supermarkets/{smId}                          -> Supermarket (read-only)
+ *   /supermarkets/{smId}/gondolas/{id}            -> Gondola (read-only)
+ *   /supermarkets/{smId}/products/{id}            -> Product (read-only)
+ *   /supermarkets/{smId}/promotions/{id}          -> Promotion (read-only)
+ *   /supermarkets/{smId}/deliveryConfig/main      -> DeliveryConfig (read-only)
+ *   /supermarkets/{smId}/settings/storeInfo       -> StoreInfo (read-only)
+ *   /supermarkets/{smId}/storefront/{config|appConfig} -> StorefrontConfig (read-only)
+ *   /supermarkets/{smId}/orders/{id}              -> Order (create + own read/update)
+ *   /supermarkets/{smId}/orders/{id}/messages     -> ChatMessage
+ *   /customers/{uid}                              -> CustomerProfile (own read/write)
+ *   /drivers/{uid}                                -> DriverProfile (read for tracking)
  */
 
-/* ----------------------------- Geo ----------------------------- */
+/* --------------------------- Catalog --------------------------- */
 
-export interface GeoPoint {
-  lat: number;
-  lng: number;
+export interface Supermarket {
+  id: string;
+  name: string;
+  ownerId?: string;
+  themeColor?: string;
+  logoUrl?: string;
+  createdAt?: any;
   updatedAt?: any;
 }
 
-/* ----------------------------- Customer ----------------------------- */
+export interface Gondola {
+  id: string;
+  supermarketId: string;
+  name: string;
+  iconName?: string;
+  level?: number;
+  colorTheme?: string;
+  order: number;
+}
 
-export type AddressLabel = 'home' | 'work' | 'other';
+export interface Product {
+  id: string;
+  supermarketId: string;
+  gondolaId: string;
+  name: string;
+  price: number;
+  imageUrl?: string;
+  order?: number;
+  ean?: string;
+  active?: boolean;
+  /** Optional descriptive fields the loja catalog may carry. */
+  description?: string;
+  unit?: string;
+  brand?: string;
+  subcategory?: string;
+  /** Loja catalog writes `stockQuantity`; `stock` kept for backward compat. */
+  stockQuantity?: number;
+  stock?: number;
+  tags?: string[]; // e.g. 'vegano', 'diet', 'sem-gluten'
+  nutrition?: Record<string, string>;
+  // Promotion fields stored on the product itself.
+  inPromo?: boolean;
+  promoPrice?: number;
+  promoEndsAt?: any;
+  lowestPrice30Days?: number;
+  salesCount?: number;
+}
 
-export interface Address {
+export type PromotionTargetType = 'product' | 'subcategory' | 'category';
+export type PromotionType = 'percentage' | 'fixed' | 'quantity' | 'free_shipping';
+
+export interface Promotion {
+  id: string;
+  active?: boolean;
+  targetType: PromotionTargetType;
+  targetId: string;
+  type: PromotionType;
+  value: number;
+  requiredQuantity?: number;
+  title?: string;
+  couponCode?: string;
+  // Coupon-only constraints (honored by applyCoupon).
+  minSubtotal?: number;
+  maxDiscount?: number;
+  firstOrderOnly?: boolean;
+}
+
+/* --------------------------- Store config --------------------------- */
+
+export interface DeliveryConfig {
+  deliveryType?: 'own' | 'grocify';
+  shippingType?: 'transparent' | 'free_diluted';
+  flatFeeValue?: number;
+  minimumOrderValue?: number;
+  pickerType?: 'employee' | 'driver';
+}
+
+export interface DayHours {
+  isOpen: boolean;
+  openTime: string;
+  closeTime: string;
+}
+
+export interface PaymentMethods {
+  pix?: boolean;
+  creditCardDelivery?: boolean;
+  debitCardDelivery?: boolean;
+  creditCardOnline?: boolean;
+  vouchers?: string[];
+}
+
+export interface StoreInfo {
+  openingHours?: Record<string, DayHours>;
+  paymentMethods?: PaymentMethods;
+  storeLocation?: { address?: string; lat?: number | null; lng?: number | null };
+}
+
+/** White-label app config authored in the loja's GondolaAppBuilder (RNF01). */
+export interface AppConfig {
+  templateId?: string;
+  shelfColor?: string;
+  backgroundColor?: string;
+  textColor?: string;
+  showTags?: boolean;
+  tagStyle?: 'modern' | 'classic' | 'minimal';
+  gondolaSpacing?: 'tight' | 'medium' | 'relaxed';
+  storeName?: string;
+  accentColor?: string;
+  fontFamily?: 'sans' | 'serif' | 'mono';
+}
+
+/* --------------------------- Customer --------------------------- */
+
+export type AddressLabel = 'casa' | 'trabalho' | 'outro';
+
+export interface SavedAddress {
   id: string;
   label: AddressLabel;
-  /** Free-text nickname overriding the label ("Casa da praia"). */
-  title?: string;
+  nickname?: string;
   cep?: string;
-  street?: string;
-  number?: string;
+  street: string;
+  number: string;
   complement?: string;
   neighborhood?: string;
   city?: string;
@@ -50,189 +148,31 @@ export interface Address {
   reference?: string;
   lat?: number;
   lng?: number;
-  isDefault?: boolean;
-  createdAt?: any;
 }
 
 export interface CustomerPreferences {
-  darkMode: boolean | null; // null -> follow system
   pushEnabled: boolean;
-  emailMarketing: boolean;
+  darkMode?: boolean | null;
+  marketingOptIn: boolean;
 }
 
 export interface CustomerProfile {
   uid: string;
   name: string;
   email: string;
-  phone: string;
+  phone?: string;
   photoUrl?: string;
   cpf?: string;
+  addresses: SavedAddress[];
   defaultAddressId?: string | null;
+  favorites: string[]; // product ids
   preferences: CustomerPreferences;
-  /** Saved payment-method tokens ONLY (never raw card data — see RNF10). */
-  paymentTokens?: SavedPaymentToken[];
-  pushTokens?: string[];
-  favorites?: string[]; // product ids
-  birthDate?: string;
+  lastSupermarketId?: string | null;
   createdAt?: any;
   updatedAt?: any;
 }
 
-/** A tokenized card returned by the payment provider (Stripe / MercadoPago / Pagar.me). */
-export interface SavedPaymentToken {
-  id: string;
-  brand: string; // visa, master, elo...
-  last4: string;
-  holderName?: string;
-  token: string; // provider token — NOT the PAN
-  provider: 'stripe' | 'mercadopago' | 'pagarme';
-}
-
-/* ----------------------------- Store / catalog ----------------------------- */
-
-/** White-label branding configured by the supermarket via GondolaAppBuilder. */
-export interface Branding {
-  primaryColor?: string; // hex, e.g. "#58CC02"
-  primaryDark?: string;
-  accentColor?: string;
-  appName?: string;
-  logoUrl?: string; // data: URI or https
-  bannerUrl?: string;
-  fontFamily?: string;
-}
-
-export interface Supermarket {
-  id: string;
-  name: string;
-  logoUrl?: string;
-  bannerUrl?: string;
-  description?: string;
-  branding?: Branding;
-  location?: GeoPoint | null;
-  address?: string;
-  isOpen?: boolean;
-  minOrder?: number;
-  rating?: number;
-  /** WhatsApp number (digits only) for support shortcut. */
-  whatsapp?: string;
-  active?: boolean;
-}
-
-export interface DeliveryConfig {
-  deliveryEnabled: boolean;
-  pickupEnabled: boolean;
-  baseFee: number;
-  perKm: number;
-  freeShippingMinimum?: number; // free shipping above this subtotal
-  maxRadiusKm?: number;
-  estimatedMinutes?: number;
-  scheduleEnabled?: boolean;
-  scheduleSlots?: string[]; // e.g. ["09:00-11:00", "11:00-13:00"]
-}
-
-export interface Category {
-  id: string;
-  name: string;
-  imageUrl?: string;
-  icon?: string;
-  order?: number;
-  /** True for curated "gôndola" rows shown on the home storefront. */
-  featured?: boolean;
-}
-
-export interface NutritionFacts {
-  servingSize?: string;
-  calories?: string;
-  table?: { label: string; value: string }[];
-}
-
-export interface Product {
-  id: string;
-  supermarketId: string;
-  name: string;
-  description?: string;
-  imageUrl?: string;
-  images?: string[];
-  price: number;
-  /** Original price for strike-through when on promo. */
-  originalPrice?: number;
-  /** 0–100 discount percent; derived if absent. */
-  discountPercent?: number;
-  categoryId?: string;
-  categoryName?: string;
-  brand?: string;
-  unit?: string; // "un", "kg", "500g", "garrafa 1L"...
-  stock?: number;
-  active?: boolean;
-  tags?: string[]; // "vegano", "diet", "sem-gluten", "promocao"...
-  barcode?: string;
-  nutrition?: NutritionFacts;
-  ageRestricted?: boolean; // alcohol / 18+
-  /** Customization groups (e.g. cut type, ripeness, add-ons). */
-  options?: ProductOptionGroup[];
-  rating?: number;
-  ratingCount?: number;
-}
-
-export interface ProductOptionGroup {
-  id: string;
-  name: string;
-  required?: boolean;
-  min?: number;
-  max?: number; // max selectable choices; 1 = single select
-  choices: ProductOptionChoice[];
-}
-
-export interface ProductOptionChoice {
-  id: string;
-  name: string;
-  priceDelta?: number;
-}
-
-/* ----------------------------- Cart ----------------------------- */
-
-export interface CartOption {
-  groupId: string;
-  groupName: string;
-  choiceId: string;
-  choiceName: string;
-  priceDelta: number;
-}
-
-export interface CartItem {
-  /** Unique line key (productId + serialized options). */
-  key: string;
-  productId: string;
-  name: string;
-  imageUrl?: string;
-  unit?: string;
-  price: number; // unit price incl. selected options
-  basePrice: number;
-  originalPrice?: number;
-  quantity: number;
-  options?: CartOption[];
-  notes?: string;
-  stock?: number;
-  ageRestricted?: boolean;
-}
-
-/* ----------------------------- Coupons ----------------------------- */
-
-export type CouponType = 'percent' | 'fixed' | 'free_shipping';
-
-export interface Coupon {
-  code: string;
-  type: CouponType;
-  value: number; // percent (0-100) or fixed amount in BRL
-  minSubtotal?: number;
-  maxDiscount?: number;
-  firstOrderOnly?: boolean;
-  active?: boolean;
-  expiresAt?: any;
-  description?: string;
-}
-
-/* ----------------------------- Orders ----------------------------- */
+/* --------------------------- Orders --------------------------- */
 
 export interface OrderItem {
   productId: string;
@@ -241,16 +181,13 @@ export interface OrderItem {
   price: number;
   imageUrl?: string;
   unit?: string;
-  options?: CartOption[];
-  notes?: string;
-  // Filled in by the store during picking (read-only for customer):
   separated?: boolean;
   missing?: boolean;
   substituted?: boolean;
   substituteName?: string;
   substitutePrice?: number;
-  /** Customer's response to a proposed substitution. */
-  substitutionAccepted?: boolean | null;
+  /** Customer's decision on a suggested substitution (cliente app). */
+  customerDecision?: 'pending' | 'accepted' | 'rejected';
 }
 
 export interface DeliveryAddress {
@@ -265,29 +202,12 @@ export interface DeliveryAddress {
   lng?: number;
 }
 
-export type DeliveryMethod = 'delivery' | 'pickup';
-
-export type PaymentMethod =
-  | 'pix'
-  | 'card_online'
-  | 'card_delivery'
-  | 'cash_delivery';
-
-export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
-
-export interface PaymentInfo {
-  method: PaymentMethod;
-  status: PaymentStatus;
-  provider?: 'stripe' | 'mercadopago' | 'pagarme';
-  tokenId?: string;
-  /** For PIX: copy-paste code + expiry. */
-  pixCode?: string;
-  pixExpiresAt?: any;
-  changeFor?: number; // troco para (cash)
-  paidAt?: any;
+export interface GeoPoint {
+  lat: number;
+  lng: number;
+  updatedAt?: any;
 }
 
-/** Store-facing order status (owned by the loja app). */
 export type OrderStatus =
   | 'pending'
   | 'picking'
@@ -296,7 +216,6 @@ export type OrderStatus =
   | 'delivered'
   | 'cancelled';
 
-/** Granular delivery sub-status (owned by the driver app). */
 export type DeliveryStatus =
   | 'awaiting_driver'
   | 'assigned'
@@ -307,63 +226,67 @@ export type DeliveryStatus =
   | 'delivered'
   | 'problem';
 
-export interface ProofOfDelivery {
-  signatureUrl?: string;
-  photoUrl?: string;
-  note?: string;
-  receivedBy?: string;
-}
+export type FulfillmentType = 'delivery' | 'pickup';
+export type PaymentMethod =
+  | 'pix'
+  | 'card_online'
+  | 'card_delivery'
+  | 'cash_delivery'
+  | 'voucher_delivery';
 
 export interface Order {
   id: string;
   supermarketId: string;
   customerId: string;
-  customerName?: string;
-  customerPhone?: string;
-
   status: OrderStatus;
   items: OrderItem[];
+  total: number;
 
-  subtotal: number;
+  subtotal?: number;
   deliveryFee?: number;
   discount?: number;
   couponCode?: string;
-  total: number;
 
-  deliveryMethod: DeliveryMethod;
-  deliveryAddress?: DeliveryAddress;
-  scheduledFor?: string | null; // null = ASAP
+  fulfillment?: FulfillmentType;
+  paymentMethod?: PaymentMethod;
+  paymentStatus?: 'pending' | 'paid' | 'failed';
+  scheduledFor?: string | null;
+  changeFor?: number | null;
+  notes?: string;
 
-  payment: PaymentInfo;
-
-  // Delivery / driver fields (written by driver app, read here):
   deliveryStatus?: DeliveryStatus;
+  deliveryAddress?: DeliveryAddress;
+  customerName?: string;
+  customerPhone?: string;
+
   driverId?: string;
   driverName?: string;
   driverLocation?: GeoPoint | null;
   driverEarnings?: number;
+
   acceptedAt?: any;
   pickedUpAt?: any;
   deliveredAt?: any;
-  proofOfDelivery?: ProofOfDelivery;
+  proofOfDelivery?: {
+    signatureUrl?: string;
+    photoUrl?: string;
+    note?: string;
+    receivedBy?: string;
+  };
 
-  // Rating (written here after delivery):
   rating?: number;
   ratingComment?: string;
-  deliveryRating?: number;
-  ratedAt?: any;
+  ratingTags?: string[];
+  ratingPhotoUrl?: string;
 
-  notes?: string;
   createdAt?: any;
   updatedAt?: any;
 
-  // Joined client-side only:
+  // Joined client-side only
   storeName?: string;
   storeLogoUrl?: string;
   storeLocation?: GeoPoint | null;
 }
-
-/* ----------------------------- Chat ----------------------------- */
 
 export type ChatRole = 'driver' | 'customer' | 'store' | 'support';
 
@@ -375,13 +298,19 @@ export interface ChatMessage {
   createdAt?: any;
 }
 
-/* ----------------------------- Driver (public read) ----------------------------- */
-
-export interface DriverPublic {
+/** Public-facing driver info for live tracking. */
+export interface PublicDriver {
   uid: string;
-  name: string;
+  name?: string;
   photoUrl?: string;
   rating?: number;
   vehicle?: { type?: string; model?: string; plate?: string };
   location?: GeoPoint | null;
+}
+
+/* --------------------------- Cart --------------------------- */
+
+export interface CartLine {
+  product: Product;
+  quantity: number;
 }
