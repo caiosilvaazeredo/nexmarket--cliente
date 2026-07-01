@@ -1,8 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, Alert, Modal, Image } from 'react-native';
+import { View, Text, ScrollView, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import * as Clipboard from 'expo-clipboard';
 import {
   ArrowLeft,
   Bike,
@@ -14,14 +13,12 @@ import {
   Banknote,
   Ticket,
   Check,
-  ChevronRight,
-  Copy,
-  ShieldCheck,
   Plus,
 } from 'lucide-react-native';
 
 import { Button } from '../src/components/ui/Button';
 import { Input } from '../src/components/ui/Input';
+import { PayOnlineSheet } from '../src/components/PayOnlineSheet';
 import { useColors } from '../src/hooks/useColors';
 import { font, fontSize, radius, spacing, shadow } from '../src/lib/theme';
 import { brl, fullAddress } from '../src/lib/format';
@@ -29,9 +26,8 @@ import { useAppStore } from '../src/store/useAppStore';
 import { useCartStore } from '../src/store/useCartStore';
 import { lineTotal, effectiveUnitPrice, applyCoupon } from '../src/lib/promotions';
 import { computeDeliveryFee, meetsMinimum } from '../src/lib/storeHours';
-import { placeOrder, markPaid, subscribeOrder } from '../src/lib/orders';
-import { maskCardNumber, maskExpiry, tokenizeCard } from '../src/lib/payments';
-import { successHaptic, warnHaptic } from '../src/lib/notifications';
+import { placeOrder, markPaid } from '../src/lib/orders';
+import { successHaptic } from '../src/lib/notifications';
 import type { PaymentMethod, FulfillmentType, Order } from '../src/lib/types';
 
 export default function Checkout() {
@@ -272,119 +268,32 @@ export default function Checkout() {
         <Button label="Confirmar pedido" size="lg" loading={placing} onPress={finalize} />
       </View>
 
-      {/* Payment modal (PIX / online card) */}
-      <PaymentModal
-        info={payModal}
-        method={payment}
-        total={total}
-        smId={currentSmId}
-        colors={colors}
-        onDone={(orderId, paid) => {
-          setPayModal(null);
-          clear();
-          router.replace(`/order/${orderId}?sm=${currentSmId}&new=1${paid ? '&paid=1' : ''}`);
-        }}
-      />
+      {/* Pagamento online (PIX / cartão) — Stripe real quando o servidor de
+          pagamentos está configurado; demonstração caso contrário. */}
+      {payModal ? (
+        <PayOnlineSheet
+          visible
+          method={payment}
+          smId={currentSmId!}
+          orderId={payModal.orderId}
+          total={total}
+          storeName={brandName}
+          onDone={async (paid, info) => {
+            const orderId = payModal.orderId;
+            setPayModal(null);
+            if (paid) {
+              try {
+                await markPaid({ supermarketId: currentSmId!, id: orderId } as Order, info);
+              } catch {
+                // webhook do servidor já pode ter gravado o status
+              }
+            }
+            clear();
+            router.replace(`/order/${orderId}?sm=${currentSmId}&new=1${paid ? '&paid=1' : ''}`);
+          }}
+        />
+      ) : null}
     </SafeAreaView>
-  );
-}
-
-/* --------------------------- Payment modal --------------------------- */
-
-function PaymentModal({
-  info,
-  method,
-  total,
-  smId,
-  colors,
-  onDone,
-}: {
-  info: { orderId: string } | null;
-  method: PaymentMethod | null;
-  total: number;
-  smId: string | null;
-  colors: any;
-  onDone: (orderId: string, paid: boolean) => void;
-}) {
-  const [order, setOrder] = useState<Order | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [card, setCard] = useState({ number: '', expiry: '', cvv: '' });
-  const pixCode = useMemo(
-    () => (info ? `00020126BR.GOV.BCB.PIX${info.orderId}5204000053039865802BR6009NEXMARKET${Math.round(total * 100)}6304NEX1` : ''),
-    [info, total],
-  );
-
-  useEffect(() => {
-    if (info && smId) {
-      const unsub = subscribeOrder(smId, info.orderId, setOrder);
-      return unsub;
-    }
-  }, [info?.orderId, smId]);
-
-  if (!info) return null;
-  const isPix = method === 'pix';
-
-  const confirm = async () => {
-    if (!order) return;
-    setBusy(true);
-    try {
-      // RNF10: card data is tokenized by the gateway and NEVER stored in our DB.
-      if (!isPix) {
-        await tokenizeCard(card);
-      }
-      await markPaid(order);
-      onDone(info.orderId, true);
-    } catch (e: any) {
-      warnHaptic();
-      Alert.alert('Pagamento não autorizado', e?.message || 'Tente outro cartão ou pague com PIX. Seu pedido foi mantido.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal visible transparent animationType="slide">
-      <View style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}>
-        <View style={{ backgroundColor: colors.card, borderTopLeftRadius: radius['2xl'], borderTopRightRadius: radius['2xl'], padding: spacing.lg, gap: spacing.md }}>
-          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>{isPix ? 'Pague com PIX' : 'Pagamento online'}</Text>
-          <Text style={{ color: colors.textMuted }}>{isPix ? 'Escaneie o QR Code ou use o PIX copia e cola. O pagamento expira em 15 minutos.' : 'Pagamento processado com segurança pela provedora. Não armazenamos os dados do seu cartão.'}</Text>
-
-          {isPix ? (
-            <>
-              <View style={{ alignSelf: 'center', width: 180, height: 180, borderRadius: radius.lg, backgroundColor: '#fff', borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
-                <QrCode size={120} color="#0F172A" />
-              </View>
-              <Pressable
-                onPress={async () => {
-                  await Clipboard.setStringAsync(pixCode);
-                  Alert.alert('Copiado!', 'Código PIX copiado. Cole no app do seu banco.');
-                }}
-                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: radius.md, borderWidth: 2, borderColor: colors.border, padding: spacing.md }}
-              >
-                <Copy size={18} color={colors.primary} />
-                <Text style={{ color: colors.primary, fontWeight: font.bold }}>Copiar código PIX</Text>
-              </Pressable>
-            </>
-          ) : (
-            <View style={{ gap: spacing.sm }}>
-              <Input label="Número do cartão" placeholder="0000 0000 0000 0000" keyboardType="number-pad" value={card.number} onChangeText={(t) => setCard((c) => ({ ...c, number: maskCardNumber(t) }))} />
-              <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-                <View style={{ flex: 1 }}><Input label="Validade" placeholder="MM/AA" keyboardType="number-pad" value={card.expiry} onChangeText={(t) => setCard((c) => ({ ...c, expiry: maskExpiry(t) }))} /></View>
-                <View style={{ flex: 1 }}><Input label="CVV" placeholder="123" keyboardType="number-pad" secureTextEntry value={card.cvv} onChangeText={(t) => setCard((c) => ({ ...c, cvv: t.replace(/\D/g, '').slice(0, 4) }))} /></View>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <ShieldCheck size={14} color={colors.primary} />
-                <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, flex: 1 }}>Dados protegidos e tokenizados pela provedora de pagamento (RNF10).</Text>
-              </View>
-            </View>
-          )}
-
-          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg, textAlign: 'center' }}>{brl(total)}</Text>
-          <Button label={isPix ? 'Já fiz o pagamento' : 'Pagar agora'} size="lg" loading={busy} onPress={confirm} />
-          <Button label="Pagar depois" variant="ghost" onPress={() => onDone(info.orderId, false)} />
-        </View>
-      </View>
-    </Modal>
   );
 }
 

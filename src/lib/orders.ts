@@ -261,10 +261,24 @@ export async function cancelOrder(order: Order): Promise<void> {
   });
 }
 
-/** Confirm an online/PIX payment (gateway-ready stub — RNF10). */
-export async function markPaid(order: Order): Promise<void> {
+/**
+ * Confirm an online/PIX payment. With Stripe the webhook do servidor também
+ * grava este status; a escrita aqui garante o funcionamento mesmo sem
+ * service account no servidor (RNF10 — nunca gravamos dados de cartão).
+ */
+export async function markPaid(
+  order: Order,
+  info?: { paymentIntentId?: string; checkoutSessionId?: string },
+): Promise<void> {
   await updateDoc(doc(db, `supermarkets/${order.supermarketId}/orders/${order.id}`), {
     paymentStatus: 'paid',
+    payment: {
+      provider: info?.paymentIntentId || info?.checkoutSessionId ? 'stripe' : 'demo',
+      status: 'paid',
+      ...(info?.paymentIntentId ? { paymentIntentId: info.paymentIntentId } : {}),
+      ...(info?.checkoutSessionId ? { checkoutSessionId: info.checkoutSessionId } : {}),
+      paidAt: new Date().toISOString(),
+    },
     updatedAt: serverTimestamp(),
   });
 }

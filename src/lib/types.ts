@@ -234,6 +234,17 @@ export type PaymentMethod =
   | 'cash_delivery'
   | 'voucher_delivery';
 
+export interface PaymentInfo {
+  provider?: 'stripe' | string;
+  status?: 'pending' | 'paid' | 'failed' | 'refunded';
+  paymentIntentId?: string;
+  checkoutSessionId?: string;
+  refundedAmount?: number;
+  refundReason?: string;
+  paidAt?: any;
+  refundedAt?: any;
+}
+
 export interface Order {
   id: string;
   supermarketId: string;
@@ -249,7 +260,9 @@ export interface Order {
 
   fulfillment?: FulfillmentType;
   paymentMethod?: PaymentMethod;
-  paymentStatus?: 'pending' | 'paid' | 'failed';
+  paymentStatus?: 'pending' | 'paid' | 'failed' | 'refunded';
+  /** Detalhes do pagamento online (Stripe) — nunca contém dados de cartão. */
+  payment?: PaymentInfo;
   scheduledFor?: string | null;
   changeFor?: number | null;
   notes?: string;
