@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, Switch, Alert, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import {
@@ -15,6 +15,7 @@ import {
   Trash2,
   User as UserIcon,
   FileText,
+  CreditCard,
 } from 'lucide-react-native';
 
 import { Screen } from '../../src/components/ui/Screen';
@@ -26,6 +27,7 @@ import { useAppStore } from '../../src/store/useAppStore';
 import { useCartStore } from '../../src/store/useCartStore';
 import { logout, deleteCurrentAuthUser, authErrorMessage } from '../../src/lib/firebase';
 import { updateCustomer, deleteCustomerData } from '../../src/lib/customers';
+import { paymentsConfigured, getSavedMethods, deleteSavedMethod, type SavedCard } from '../../src/lib/payments';
 
 export default function Profile() {
   const { colors, dark } = useColors();
@@ -118,10 +120,24 @@ export default function Profile() {
         </View>
       </Card>
 
+      {/* Carteira (cashback) */}
+      {Number(customer?.walletBalance || 0) > 0 ? (
+        <Card style={{ backgroundColor: colors.primary, borderColor: colors.primaryDark }}>
+          <Text style={{ color: 'rgba(255,255,255,0.9)', fontWeight: font.bold, fontSize: fontSize.sm }}>Carteira · cashback</Text>
+          <Text style={{ color: '#fff', fontWeight: font.black, fontSize: 30 }}>
+            R$ {Number(customer?.walletBalance || 0).toFixed(2).replace('.', ',')}
+          </Text>
+          <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: fontSize.xs }}>Use como desconto no checkout do seu próximo pedido.</Text>
+        </Card>
+      ) : null}
+
       <Text style={{ color: colors.textMuted, fontWeight: font.bold, fontSize: fontSize.xs, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: spacing.sm }}>Minha conta</Text>
       <MenuItem icon={<MapPin size={20} color={colors.primary} />} label="Endereços de entrega" colors={colors} onPress={() => router.push('/addresses')} badge={customer?.addresses?.length ? String(customer.addresses.length) : undefined} />
       <MenuItem icon={<Heart size={20} color={colors.primary} />} label="Favoritos" colors={colors} onPress={() => router.push('/(tabs)/search?fav=1')} badge={customer?.favorites?.length ? String(customer.favorites.length) : undefined} />
       <MenuItem icon={<Store size={20} color={colors.primary} />} label="Trocar de loja" colors={colors} onPress={() => router.replace('/store-picker')} />
+
+      {/* Cartões salvos na Stripe (pagamento em 1 toque) */}
+      {paymentsConfigured() ? <SavedCardsSection colors={colors} /> : null}
 
       <Text style={{ color: colors.textMuted, fontWeight: font.bold, fontSize: fontSize.xs, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: spacing.sm }}>Preferências</Text>
       <ToggleItem icon={<Bell size={20} color={colors.primary} />} label="Notificações push" value={customer?.preferences?.pushEnabled !== false} onChange={togglePush} colors={colors} />
@@ -139,6 +155,60 @@ export default function Profile() {
         {brand.name} • Nexmarket Cliente v1.0.0
       </Text>
     </Screen>
+  );
+}
+
+/** Cartões salvos na Stripe — listagem e remoção (o número nunca fica no app). */
+function SavedCardsSection({ colors }: { colors: any }) {
+  const [cards, setCards] = useState<SavedCard[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  const load = () => {
+    getSavedMethods()
+      .then((c) => {
+        setCards(c);
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+  };
+  useEffect(load, []);
+
+  const remove = (card: SavedCard) => {
+    Alert.alert('Remover cartão', `Remover ${card.brand} •••• ${card.last4}?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Remover',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteSavedMethod(card.id);
+            setCards((c) => c.filter((x) => x.id !== card.id));
+          } catch (e: any) {
+            Alert.alert('Erro', e?.message || 'Não foi possível remover o cartão.');
+          }
+        },
+      },
+    ]);
+  };
+
+  if (!loaded || cards.length === 0) return null;
+  return (
+    <>
+      <Text style={{ color: colors.textMuted, fontWeight: font.bold, fontSize: fontSize.xs, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: spacing.sm }}>
+        Cartões salvos
+      </Text>
+      {cards.map((card) => (
+        <Card key={card.id} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+          <CreditCard size={20} color={colors.primary} />
+          <Text style={{ flex: 1, color: colors.text, fontWeight: font.bold, textTransform: 'capitalize' }}>
+            {card.brand} •••• {card.last4}
+          </Text>
+          <Pressable hitSlop={10} onPress={() => remove(card)}>
+            <Trash2 size={18} color={colors.danger} />
+          </Pressable>
+        </Card>
+      ))}
+    </>
   );
 }
 

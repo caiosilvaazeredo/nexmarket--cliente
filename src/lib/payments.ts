@@ -124,6 +124,8 @@ export function createCheckoutSession(input: {
   amount: number;
   storeName?: string;
   next?: string;
+  /** Salvar o cartão no Customer da Stripe para pagar em 1 toque depois. */
+  saveCard?: boolean;
 }): Promise<CheckoutSession> {
   return api<CheckoutSession>('/api/payments/checkout-session', {
     method: 'POST',
@@ -166,4 +168,86 @@ export function getPaymentStatus(input: {
   if (input.sessionId) query.sessionId = input.sessionId;
   if (input.paymentIntentId) query.paymentIntentId = input.paymentIntentId;
   return api<PaymentStatus>('/api/payments/status', { query });
+}
+
+/* ------------------------ Cartões salvos (1 toque) ------------------------ */
+
+export interface SavedCard {
+  id: string;
+  brand: string;
+  last4: string;
+  expMonth?: number;
+  expYear?: number;
+}
+
+export async function getSavedMethods(): Promise<SavedCard[]> {
+  const res = await api<{ methods: SavedCard[] }>('/api/payments/saved-methods');
+  return res.methods || [];
+}
+
+export function deleteSavedMethod(id: string): Promise<{ ok: boolean }> {
+  return api(`/api/payments/saved-methods/${id}`, { method: 'DELETE' });
+}
+
+export interface ChargeResult {
+  ok: boolean;
+  status: string;
+  paymentIntentId: string;
+  amount: number;
+}
+
+/** Pagamento em 1 toque com cartão salvo. Lança erro com `requiresAction=true`
+ * quando o cartão exige 3DS — aí o app cai para o Stripe Checkout. */
+export async function chargeSaved(input: {
+  smId: string;
+  orderId: string;
+  amount: number;
+  paymentMethodId: string;
+  kind?: 'order' | 'tip';
+}): Promise<ChargeResult> {
+  try {
+    return await api<ChargeResult>('/api/payments/charge-saved', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  } catch (e: any) {
+    if (e?.status === 402) e.requiresAction = true;
+    throw e;
+  }
+}
+
+/** Gorjeta pós-entrega via Stripe Checkout (sem cartão salvo). */
+export function createTipCheckout(input: {
+  smId: string;
+  orderId: string;
+  amount: number;
+  driverName?: string;
+  next?: string;
+}): Promise<CheckoutSession> {
+  return api<CheckoutSession>('/api/payments/tip-checkout', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+/* --------------------- Reembolso self-service por item --------------------- */
+
+/** Estorno parcial automático de itens com problema. Erros esperados:
+ * `needsReview=true` (acima do teto → vira chamado) e `notOnline=true`
+ * (pedido sem pagamento online). */
+export async function requestItemRefund(input: {
+  smId: string;
+  orderId: string;
+  amount: number;
+  reason: string;
+}): Promise<{ ok: boolean; refundId: string; amount: number }> {
+  try {
+    return await api('/api/payments/item-refund', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  } catch (e: any) {
+    e.needsReview = e?.status === 422;
+    throw e;
+  }
 }

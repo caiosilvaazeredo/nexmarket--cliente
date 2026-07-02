@@ -75,11 +75,20 @@ export function freeShippingHint(config: DeliveryConfig | null, subtotal: number
   return null;
 }
 
-/** The delivery fee that applies to a subtotal under the store's policy. */
+/** The delivery fee that applies to a subtotal under the store's policy.
+ * Em alta demanda a loja publica `surgeMultiplier` > 1 (frete dinâmico). */
 export function computeDeliveryFee(config: DeliveryConfig | null): number {
   if (!config) return 0;
-  if (config.shippingType === 'transparent') return Number(config.flatFeeValue || 0);
+  const surge = Math.max(1, Number(config.surgeMultiplier || 1));
+  if (config.shippingType === 'transparent') {
+    return Number((Number(config.flatFeeValue || 0) * surge).toFixed(2));
+  }
   return 0; // free_diluted
+}
+
+/** Alta demanda ativa (frete dinâmico) — usado para avisar o cliente. */
+export function surgeActive(config: DeliveryConfig | null): boolean {
+  return Math.max(1, Number(config?.surgeMultiplier || 1)) > 1;
 }
 
 /** Whether the subtotal meets the minimum required to checkout (RF13). */

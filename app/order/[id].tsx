@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, ScrollView, Pressable, Alert, Modal, Image, Linking } from 'react-native';
+import { View, Text, ScrollView, Pressable, Alert, Modal, Image, Linking, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -45,6 +45,7 @@ import { pickImage } from '../../src/lib/images';
 import { successHaptic } from '../../src/lib/notifications';
 import { PAYMENT_SHORT } from '../../src/lib/payments';
 import { PayOnlineSheet } from '../../src/components/PayOnlineSheet';
+import { DeliveryPinBanner, TipSheet, ItemIssueSheet } from '../../src/components/OrderExtras';
 import { useReorder } from '../../src/hooks/useReorder';
 import type { Order, PublicDriver } from '../../src/lib/types';
 
@@ -62,6 +63,8 @@ export default function OrderScreen() {
   const [showSub, setShowSub] = useState(false);
   const [showRate, setShowRate] = useState(params.rate === '1');
   const [showPix, setShowPix] = useState(false);
+  const [showTip, setShowTip] = useState(false);
+  const [showIssue, setShowIssue] = useState(false);
   const reorder = useReorder();
 
   useEffect(() => {
@@ -159,6 +162,9 @@ export default function OrderScreen() {
             </Text>
           </View>
         ) : null}
+
+        {/* Código de confirmação da entrega (PIN) */}
+        {isDelivery && !cancelled && !finished ? <DeliveryPinBanner order={order} /> : null}
 
         {/* Substitution alert */}
         {needsSubstitutionReview(order) ? (
@@ -268,6 +274,23 @@ export default function OrderScreen() {
           </View>
         ) : null}
 
+        {/* Segurança: compartilhar acompanhamento em tempo real */}
+        {isDelivery && !cancelled && !finished ? (
+          <Button
+            label="Compartilhar acompanhamento"
+            variant="ghost"
+            onPress={() =>
+              Share.share({
+                message:
+                  `Estou acompanhando meu pedido #${order.id.slice(0, 6).toUpperCase()} de ${order.storeName || 'uma loja Nexmarket'}. ` +
+                  `Status: ${status.label}.` +
+                  (order.driverName ? ` Entregador: ${order.driverName}.` : '') +
+                  ` Acompanhe: nexcliente://order/${order.id}?sm=${order.supermarketId}`,
+              }).catch(() => {})
+            }
+          />
+        ) : null}
+
         {/* Rating (delivered) */}
         {finished && !order.rating ? (
           <Button label="Avaliar pedido" icon={<Star size={18} color="#fff" />} onPress={() => setShowRate(true)} />
@@ -276,6 +299,23 @@ export default function OrderScreen() {
             <Text style={{ color: colors.text, fontWeight: font.bold }}>Sua avaliação</Text>
             <StarRating value={order.rating} readOnly size={20} />
           </Card>
+        ) : null}
+
+        {/* Pós-entrega: gorjeta + problema com itens */}
+        {finished && !cancelled && order.driverId ? (
+          <Button
+            label={order.tip ? `Dar mais gorjeta (já enviou ${brl(order.tip)})` : 'Dar gorjeta ao entregador 💚'}
+            variant="secondary"
+            onPress={() => setShowTip(true)}
+          />
+        ) : null}
+        {finished && !cancelled && order.paymentStatus === 'paid' ? (
+          <Button
+            label="Problema com algum item?"
+            variant="ghost"
+            textStyle={{ color: colors.textMuted }}
+            onPress={() => setShowIssue(true)}
+          />
         ) : null}
 
         {/* Repeat / cancel */}
@@ -302,6 +342,12 @@ export default function OrderScreen() {
 
       {/* Rating modal */}
       <RatingModal visible={showRate} order={order} colors={colors} onClose={() => setShowRate(false)} />
+
+      {/* Gorjeta pós-entrega */}
+      <TipSheet visible={showTip} order={order} onClose={() => setShowTip(false)} />
+
+      {/* Problema com itens (reembolso self-service) */}
+      <ItemIssueSheet visible={showIssue} order={order} onClose={() => setShowIssue(false)} />
 
       {/* Pagamento online (PIX / cartão via Stripe) */}
       <PayOnlineSheet

@@ -26,6 +26,7 @@ import {
   subscribeStorefrontConfig,
 } from '../src/lib/catalog';
 import { subscribeMyOrders } from '../src/lib/orders';
+import { creditCashbackForOrders } from '../src/lib/wallet';
 import { customerStatus } from '../src/components/ui/Badge';
 import { ensureNotificationPermissions, notifyOrderStatus } from '../src/lib/notifications';
 import { startNetWatcher } from '../src/lib/net';
@@ -121,6 +122,8 @@ function RootNav() {
 
   /* ---- catalog for the selected store (real-time, RNF06) ---- */
   useEffect(() => {
+    const { setCatalogLoaded } = useAppStore.getState();
+    setCatalogLoaded(false);
     if (!currentSmId) {
       setSupermarket(null);
       setGondolas([]);
@@ -135,7 +138,10 @@ function RootNav() {
     const unsubs = [
       subscribeSupermarket(currentSmId, setSupermarket),
       subscribeGondolas(currentSmId, setGondolas),
-      subscribeProducts(currentSmId, setProducts),
+      subscribeProducts(currentSmId, (p) => {
+        setProducts(p);
+        setCatalogLoaded(true);
+      }),
       subscribePromotions(currentSmId, setPromotions),
       subscribeDeliveryConfig(currentSmId, setDeliveryConfig),
       subscribeStoreInfo(currentSmId, setStoreInfo),
@@ -166,6 +172,17 @@ function RootNav() {
         prevStatuses.current[o.id] = key;
       });
       setMyOrders(orders);
+      // Cashback: credita pedidos entregues ainda não creditados (idempotente).
+      creditCashbackForOrders(authUser.uid, orders)
+        .then((credited) => {
+          if (credited > 0) {
+            notifyOrderStatus(
+              'Cashback na carteira 💚',
+              `Você ganhou R$ ${credited.toFixed(2).replace('.', ',')} de volta. Use no próximo pedido!`,
+            );
+          }
+        })
+        .catch(() => {});
     });
   }, [authUser?.uid]);
 

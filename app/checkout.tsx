@@ -25,9 +25,10 @@ import { brl, fullAddress } from '../src/lib/format';
 import { useAppStore } from '../src/store/useAppStore';
 import { useCartStore } from '../src/store/useCartStore';
 import { lineTotal, effectiveUnitPrice, applyCoupon } from '../src/lib/promotions';
-import { computeDeliveryFee, meetsMinimum } from '../src/lib/storeHours';
+import { computeDeliveryFee, meetsMinimum, surgeActive } from '../src/lib/storeHours';
 import { placeOrder, markPaid } from '../src/lib/orders';
-import { successHaptic } from '../src/lib/notifications';
+import { spendWallet } from '../src/lib/wallet';
+import { successHaptic, getExpoPushToken } from '../src/lib/notifications';
 import type { PaymentMethod, FulfillmentType, Order } from '../src/lib/types';
 
 export default function Checkout() {
@@ -53,6 +54,9 @@ export default function Checkout() {
   const [payment, setPayment] = useState<PaymentMethod | null>(null);
   const [changeFor, setChangeFor] = useState('');
   const [notes, setNotes] = useState('');
+  const [tip, setTip] = useState(0);
+  const [tipCustom, setTipCustom] = useState('');
+  const [useWallet, setUseWallet] = useState(false);
   const [placing, setPlacing] = useState(false);
   const [payModal, setPayModal] = useState<{ orderId: string } | null>(null);
 
@@ -73,7 +77,14 @@ export default function Checkout() {
     const res = applyCoupon(couponCode, subtotal, promotions, { isFirstOrder: myOrders.length === 0, deliveryFee });
     return res.ok ? res.discount : couponDiscount || 0;
   }, [couponCode, subtotal, promotions, deliveryFee, myOrders.length, couponDiscount]);
-  const total = Math.max(0, subtotal + deliveryFee - discount);
+  // Gorjeta: 100% vai para o entregador; só em pedidos com entrega.
+  const tipValue = fulfillment === 'delivery' ? tip : 0;
+  const totalBeforeWallet = Math.max(0, subtotal + deliveryFee - discount) + tipValue;
+  // Carteira (cashback): saldo pode abater até o valor total do pedido.
+  const walletBalance = Number(customer?.walletBalance || 0);
+  const walletUsed = useWallet ? Math.min(walletBalance, totalBeforeWallet) : 0;
+  const total = Number(Math.max(0, totalBeforeWallet - walletUsed).toFixed(2));
+  const surge = surgeActive(deliveryConfig);
   const min = meetsMinimum(deliveryConfig, subtotal);
 
   const address = customer?.addresses?.find((a) => a.id === addressId) || null;
@@ -119,6 +130,7 @@ export default function Checkout() {
         imageUrl: l.product.imageUrl,
         unit: l.product.unit,
       }));
+      const pushToken = await getExpoPushToken();
       const orderId = await placeOrder({
         supermarketId: currentSmId!,
         items,
@@ -126,6 +138,9 @@ export default function Checkout() {
         deliveryFee,
         discount,
         total,
+        tip: tipValue,
+        walletUsed,
+        pushToken,
         couponCode: couponCode || undefined,
         fulfillment,
         paymentMethod: payment,
@@ -150,8 +165,18 @@ export default function Checkout() {
       });
       successHaptic();
 
-      if (payment === 'pix' || payment === 'card_online') {
+      // Debita o saldo da carteira usado neste pedido.
+      if (walletUsed > 0 && authUser) {
+        spendWallet(authUser.uid, walletUsed).catch(() => {});
+      }
+
+      if ((payment === 'pix' || payment === 'card_online') && total > 0) {
         setPayModal({ orderId });
+      } else if ((payment === 'pix' || payment === 'card_online') && total === 0) {
+        // Carteira cobriu tudo — nada a cobrar online.
+        await markPaid({ supermarketId: currentSmId!, id: orderId } as Order).catch(() => {});
+        clear();
+        router.replace(`/order/${orderId}?sm=${currentSmId}&new=1&paid=1`);
       } else {
         clear();
         router.replace(`/order/${orderId}?sm=${currentSmId}&new=1`);
@@ -232,9 +257,62 @@ export default function Checkout() {
           {payment === 'cash_delivery' ? (
             <Input label="Troco para quanto? (opcional)" placeholder="Ex: 100,00" keyboardType="numeric" value={changeFor} onChangeText={setChangeFor} icon={<Banknote size={18} color={colors.textSubtle} />} />
           ) : null}
+
+          {/* Carteira (cashback) como desconto */}
+          {walletBalance > 0 ? (
+            <Pressable
+              onPress={() => setUseWallet((v) => !v)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderRadius: radius.lg, borderWidth: 2, borderColor: useWallet ? colors.primary : colors.border, backgroundColor: useWallet ? colors.primarySoft : colors.card, padding: spacing.md }}
+            >
+              <View style={{ width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: useWallet ? colors.primary : colors.border, backgroundColor: useWallet ? colors.primary : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
+                {useWallet ? <Check size={14} color="#fff" /> : null}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontWeight: font.bold }}>Usar saldo da carteira</Text>
+                <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs }}>
+                  Você tem {brl(walletBalance)} de cashback disponível
+                </Text>
+              </View>
+              {useWallet ? <Text style={{ color: colors.primary, fontWeight: font.black }}>- {brl(walletUsed)}</Text> : null}
+            </Pressable>
+          ) : null}
         </Section>
 
-        {/* 5. Notes */}
+        {/* 5. Tip (delivery only) — 100% para o entregador */}
+        {fulfillment === 'delivery' ? (
+          <Section title="Gorjeta para o entregador" colors={colors}>
+            <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, marginTop: -4 }}>
+              100% do valor vai para quem faz a sua entrega. Você também pode dar gorjeta depois.
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {[0, 2, 5, 10].map((v) => (
+                <SlotChip
+                  key={v}
+                  label={v === 0 ? 'Sem gorjeta' : brl(v)}
+                  active={tip === v && !tipCustom}
+                  onPress={() => {
+                    setTip(v);
+                    setTipCustom('');
+                  }}
+                  colors={colors}
+                />
+              ))}
+            </ScrollView>
+            <Input
+              label="Outro valor (opcional)"
+              placeholder="Ex: 7,50"
+              keyboardType="numeric"
+              value={tipCustom}
+              onChangeText={(t) => {
+                setTipCustom(t);
+                const v = Number(t.replace(',', '.'));
+                setTip(Number.isFinite(v) && v > 0 ? Math.min(v, 200) : 0);
+              }}
+            />
+          </Section>
+        ) : null}
+
+        {/* 6. Notes */}
         <Section title="Observações (opcional)" colors={colors}>
           <Input placeholder="Ex: tocar a campainha, deixar na portaria…" value={notes} onChangeText={setNotes} />
         </Section>
@@ -251,7 +329,9 @@ export default function Checkout() {
             <View style={{ height: 1, backgroundColor: colors.border, marginVertical: 4 }} />
             <Row label="Subtotal" value={brl(subtotal)} colors={colors} />
             {discount > 0 ? <Row label="Desconto" value={`- ${brl(discount)}`} colors={colors} /> : null}
-            <Row label="Frete" value={deliveryFee > 0 ? brl(deliveryFee) : 'Grátis'} colors={colors} />
+            <Row label={surge ? 'Frete (alta demanda ⚡)' : 'Frete'} value={deliveryFee > 0 ? brl(deliveryFee) : 'Grátis'} colors={colors} />
+            {tipValue > 0 ? <Row label="Gorjeta do entregador" value={brl(tipValue)} colors={colors} /> : null}
+            {walletUsed > 0 ? <Row label="Saldo da carteira" value={`- ${brl(walletUsed)}`} colors={colors} /> : null}
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
               <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.base }}>Total</Text>
               <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>{brl(total)}</Text>

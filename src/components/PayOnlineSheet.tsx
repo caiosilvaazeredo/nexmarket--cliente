@@ -16,10 +16,13 @@ import {
   createCheckoutSession,
   createPixPayment,
   getPaymentStatus,
+  getSavedMethods,
+  chargeSaved,
   tokenizeCard,
   maskCardNumber,
   maskExpiry,
   type PixPayment,
+  type SavedCard,
 } from '../lib/payments';
 import { warnHaptic, successHaptic } from '../lib/notifications';
 import type { PaymentMethod } from '../lib/types';
@@ -59,6 +62,8 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [awaitingCard, setAwaitingCard] = useState(false);
   const [card, setCard] = useState({ number: '', expiry: '', cvv: '' });
+  const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
+  const [saveCard, setSaveCard] = useState(true);
   const doneRef = useRef(false);
 
   const finish = (paid: boolean, info?: PaidInfo) => {
@@ -88,6 +93,14 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
     });
     return unsub;
   }, [visible, smId, orderId]);
+
+  // Cartões salvos (pagamento em 1 toque).
+  useEffect(() => {
+    if (!visible || !stripeMode || isPix) return;
+    getSavedMethods()
+      .then(setSavedCards)
+      .catch(() => setSavedCards([]));
+  }, [visible, stripeMode, isPix]);
 
   // PIX (Stripe): cria a cobrança ao abrir.
   useEffect(() => {
@@ -132,7 +145,7 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
   const payWithCard = async () => {
     setBusy(true);
     try {
-      const session = await createCheckoutSession({ smId, orderId, amount: total, storeName, next: redirect });
+      const session = await createCheckoutSession({ smId, orderId, amount: total, storeName, next: redirect, saveCard });
       setSessionId(session.sessionId);
       setAwaitingCard(true);
       await WebBrowser.openAuthSessionAsync(session.url, redirect);
@@ -140,6 +153,31 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
     } catch (e: any) {
       warnHaptic();
       Alert.alert('Pagamento', e?.message || 'Não foi possível iniciar o pagamento.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Pagamento em 1 toque com cartão salvo (off_session). */
+  const payWithSaved = async (pm: SavedCard) => {
+    setBusy(true);
+    try {
+      const res = await chargeSaved({ smId, orderId, amount: total, paymentMethodId: pm.id });
+      if (res.ok) {
+        finish(true, { paymentIntentId: res.paymentIntentId });
+      } else {
+        Alert.alert('Pagamento', 'A cobrança não foi concluída. Tente outro cartão.');
+      }
+    } catch (e: any) {
+      warnHaptic();
+      if (e?.requiresAction) {
+        Alert.alert('Autenticação necessária', 'Este cartão pede confirmação do banco. Vamos abrir o pagamento seguro no navegador.', [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Continuar', onPress: payWithCard },
+        ]);
+      } else {
+        Alert.alert('Pagamento não autorizado', e?.message || 'Tente outro cartão.');
+      }
     } finally {
       setBusy(false);
     }
@@ -253,13 +291,45 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
           ) : /* --------------------------- Cartão --------------------------- */
           stripeMode ? (
             <>
+              {/* Cartões salvos → pagamento em 1 toque */}
+              {savedCards.length > 0 && !awaitingCard ? (
+                <View style={{ gap: spacing.sm }}>
+                  {savedCards.map((pm) => (
+                    <Pressable
+                      key={pm.id}
+                      disabled={busy}
+                      onPress={() => payWithSaved(pm)}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderRadius: radius.lg, borderWidth: 2, borderColor: colors.primary, backgroundColor: colors.primarySoft, padding: spacing.md }}
+                    >
+                      <CreditCard size={22} color={colors.primary} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: colors.text, fontWeight: font.black, textTransform: 'capitalize' }}>
+                          {pm.brand} •••• {pm.last4}
+                        </Text>
+                        <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs }}>Pagar em 1 toque</Text>
+                      </View>
+                      {busy ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+                    </Pressable>
+                  ))}
+                  <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, textAlign: 'center' }}>ou pague com outro cartão abaixo</Text>
+                </View>
+              ) : null}
+
               <Text style={{ color: colors.textMuted }}>
                 Você será levado à página segura da Stripe para digitar os dados do cartão. Nada fica salvo no app ou em nossos servidores.
               </Text>
+              {!awaitingCard ? (
+                <Pressable onPress={() => setSaveCard((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={{ width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: saveCard ? colors.primary : colors.border, backgroundColor: saveCard ? colors.primary : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
+                    {saveCard ? <Text style={{ color: '#fff', fontWeight: font.black, fontSize: 13 }}>✓</Text> : null}
+                  </View>
+                  <Text style={{ color: colors.textMuted, fontSize: fontSize.sm, flex: 1 }}>Salvar cartão para pagar em 1 toque nas próximas compras</Text>
+                </Pressable>
+              ) : null}
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <ShieldCheck size={14} color={colors.primary} />
                 <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, flex: 1 }}>
-                  Pagamento processado pela Stripe (PCI-DSS). RNF10: nenhum dado de cartão é armazenado.
+                  Pagamento processado pela Stripe (PCI-DSS). Apple Pay/Google Pay aparecem automaticamente quando disponíveis. RNF10: nenhum dado de cartão é armazenado.
                 </Text>
               </View>
               {awaitingCard ? (
@@ -286,7 +356,13 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
 
           {stripeMode ? (
             !isPix && !awaitingCard ? (
-              <Button label="Pagar com cartão (Stripe)" size="lg" loading={busy} icon={<CreditCard size={18} color="#fff" />} onPress={payWithCard} />
+              <Button
+                label={savedCards.length > 0 ? 'Pagar com outro cartão' : 'Pagar com cartão (Stripe)'}
+                size="lg"
+                loading={busy}
+                icon={<CreditCard size={18} color="#fff" />}
+                onPress={payWithCard}
+              />
             ) : null
           ) : (
             <Button label={isPix ? 'Já fiz o pagamento' : 'Pagar agora'} size="lg" loading={busy} onPress={confirmDemo} />

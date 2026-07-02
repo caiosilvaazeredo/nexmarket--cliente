@@ -1,8 +1,8 @@
-import React from 'react';
-import { View, Text } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, Animated } from 'react-native';
 import { Check, Receipt, PackageSearch, PackageCheck, Bike, Home, Store } from 'lucide-react-native';
 import { useColors } from '../hooks/useColors';
-import { font, fontSize } from '../lib/theme';
+import { font, fontSize, radius } from '../lib/theme';
 import type { Order } from '../lib/types';
 
 interface Step {
@@ -58,8 +58,42 @@ export function OrderStatusTracker({ order }: { order: Order }) {
   const { steps, current } = buildSteps(order);
   const cancelled = order.status === 'cancelled';
 
+  // Barra de progresso animada (estilo "pizza tracker") + pulso no passo atual.
+  const progress = useRef(new Animated.Value(0)).current;
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const pct = cancelled ? 0 : Math.max(0.06, (current + 1) / steps.length);
+    Animated.timing(progress, { toValue: pct, duration: 650, useNativeDriver: false }).start();
+  }, [current, cancelled, steps.length]);
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1.18, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ]),
+    );
+    if (!cancelled && current < steps.length - 1) loop.start();
+    return () => loop.stop();
+  }, [current, cancelled]);
+
   return (
     <View style={{ gap: 0 }}>
+      {/* Progress bar */}
+      {!cancelled ? (
+        <View style={{ height: 8, borderRadius: radius.full, backgroundColor: colors.cardMuted, overflow: 'hidden', marginBottom: 16 }}>
+          <Animated.View
+            style={{
+              height: '100%',
+              borderRadius: radius.full,
+              backgroundColor: colors.primary,
+              width: progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
+            }}
+          />
+        </View>
+      ) : null}
+
       {steps.map((step, i) => {
         const done = !cancelled && i <= current;
         const active = !cancelled && i === current;
@@ -69,7 +103,7 @@ export function OrderStatusTracker({ order }: { order: Order }) {
           <View key={step.key} style={{ flexDirection: 'row', gap: 12 }}>
             {/* Rail */}
             <View style={{ alignItems: 'center', width: 36 }}>
-              <View
+              <Animated.View
                 style={{
                   width: 36,
                   height: 36,
@@ -79,6 +113,7 @@ export function OrderStatusTracker({ order }: { order: Order }) {
                   borderColor: done ? colors.primary : colors.border,
                   alignItems: 'center',
                   justifyContent: 'center',
+                  transform: active && !last ? [{ scale: pulse }] : undefined,
                 }}
               >
                 {done && !active ? (
@@ -86,7 +121,7 @@ export function OrderStatusTracker({ order }: { order: Order }) {
                 ) : (
                   <Icon size={18} color={done ? '#fff' : colors.textSubtle} />
                 )}
-              </View>
+              </Animated.View>
               {!last ? (
                 <View style={{ width: 3, flex: 1, minHeight: 26, backgroundColor: i < current && !cancelled ? colors.primary : colors.border }} />
               ) : null}

@@ -86,11 +86,28 @@ Antes de publicar em produção:
 |---|---|
 | PIX | o servidor cria a cobrança na Stripe → app mostra **QR code real + copia-e-cola** → confirmação automática (polling + webhook) |
 | Cartão online | abre o **Stripe Checkout** no navegador (página segura da Stripe) → ao voltar, o app confirma o status |
+| **Cartão salvo (1 toque)** | marque "Salvar cartão" no primeiro pagamento; depois pague direto no app sem redigitar (fallback 3DS → Checkout) |
+| **Saldo da carteira** | cashback acumulado vira desconto no checkout (pode cobrir o pedido inteiro) |
 | Cartão/dinheiro/vale na entrega | sem cobrança online; a loja recebe na entrega |
 
-- Nenhum dado de cartão passa pelo app ou pelo Firestore (RNF10 / PCI-DSS).
+- Nenhum dado de cartão passa pelo app ou pelo Firestore (RNF10 / PCI-DSS) —
+  cartões salvos ficam no **Stripe Customer**; gerencie-os no Perfil.
 - Pedido online só entra em separação na loja **depois de pago**.
 - Estornos feitos pelo painel Empresa aparecem na tela do pedido ("Pagamento estornado").
+
+## ✨ Outras funcionalidades (ver ROADMAP.md no repo Empresa)
+
+- **Gorjeta ao entregador** no checkout e pós-entrega (100% vai para ele).
+- **Reembolso self-service**: entregou com item errado/faltando? "Problema com
+  algum item?" na tela do pedido → estorno parcial automático até o teto.
+- **PIN de entrega**: código de 4 dígitos exibido no pedido; informe ao
+  entregador (anti-fraude).
+- **Busca em todas as lojas**: aba Buscar → "🌎 Em todas as lojas" compara
+  preços por item e permite trocar de loja.
+- **Recomendações**: "Compre de novo", "Mais vendidos" e vitrine por horário.
+- **Cashback**: % definido pela plataforma cai na carteira a cada entrega.
+- **Push transacional**: requer projectId EAS (`eas build:configure`); sem ele
+  o app usa apenas notificações locais.
 
 ## 🆘 Problemas comuns
 

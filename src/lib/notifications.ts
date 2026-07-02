@@ -1,5 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import * as Haptics from 'expo-haptics';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 // Show banners + play sound even when the app is foregrounded.
@@ -30,6 +31,27 @@ export async function ensureNotificationPermissions(): Promise<boolean> {
     });
   }
   return status === 'granted';
+}
+
+/**
+ * Token Expo Push do dispositivo — anexado ao pedido para que loja/entregador
+ * disparem notificações transacionais via servidor de pagamentos
+ * (`POST /api/notifications/send`). Requer o projectId do EAS
+ * (`eas build:configure`); sem ele retorna null e o app segue sem push remoto.
+ */
+export async function getExpoPushToken(): Promise<string | null> {
+  try {
+    const ok = await ensureNotificationPermissions();
+    if (!ok) return null;
+    const projectId =
+      (Constants as any)?.expoConfig?.extra?.eas?.projectId ||
+      (Constants as any)?.easConfig?.projectId;
+    if (!projectId) return null;
+    const res = await Notifications.getExpoPushTokenAsync({ projectId });
+    return res.data || null;
+  } catch {
+    return null;
+  }
 }
 
 /** Fire a local notification for an order status change (RF22). */
