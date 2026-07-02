@@ -126,11 +126,14 @@ export function ProductCard({ product, onPress, width = '100%' }: ProductCardPro
         {product.unit || (product.ean ? '1 unidade' : '1 unidade')}
       </Text>
 
-      {/* Price */}
+      {/* Price (com unidade — hierarquia clara: R$ X / kg) */}
       <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6, marginBottom: spacing.sm }}>
         <Text style={{ color: hasPromo ? colors.danger : colors.text, fontWeight: font.black, fontSize: fontSize.lg }}>
           {brl(unitPrice)}
         </Text>
+        {product.unit ? (
+          <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, fontWeight: font.bold }}>/ {product.unit}</Text>
+        ) : null}
         {hasPromo ? (
           <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, textDecorationLine: 'line-through' }}>
             {brl(product.price)}

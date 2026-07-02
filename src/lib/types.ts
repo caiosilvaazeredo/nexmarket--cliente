@@ -94,6 +94,8 @@ export interface DeliveryConfig {
   flatFeeValue?: number;
   minimumOrderValue?: number;
   pickerType?: 'employee' | 'driver';
+  /** Frete dinâmico: >1 em alta demanda (escrito automaticamente pela loja). */
+  surgeMultiplier?: number;
 }
 
 export interface DayHours {
@@ -168,6 +170,8 @@ export interface CustomerProfile {
   favorites: string[]; // product ids
   preferences: CustomerPreferences;
   lastSupermarketId?: string | null;
+  /** Carteira digital: saldo de cashback utilizável em pedidos (R$). */
+  walletBalance?: number;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -188,6 +192,8 @@ export interface OrderItem {
   substitutePrice?: number;
   /** Customer's decision on a suggested substitution (cliente app). */
   customerDecision?: 'pending' | 'accepted' | 'rejected';
+  /** Item reportado com problema pelo cliente (fluxo de reembolso). */
+  reported?: boolean;
 }
 
 export interface DeliveryAddress {
@@ -230,9 +236,24 @@ export type FulfillmentType = 'delivery' | 'pickup';
 export type PaymentMethod =
   | 'pix'
   | 'card_online'
+  | 'picpay'
+  | 'nupay'
   | 'card_delivery'
   | 'cash_delivery'
   | 'voucher_delivery';
+
+export interface PaymentInfo {
+  provider?: 'stripe' | string;
+  status?: 'pending' | 'paid' | 'failed' | 'refunded';
+  paymentIntentId?: string;
+  checkoutSessionId?: string;
+  refundedAmount?: number;
+  refundReason?: string;
+  /** Reembolso automático self-service já utilizado neste pedido. */
+  selfRefunded?: boolean;
+  paidAt?: any;
+  refundedAt?: any;
+}
 
 export interface Order {
   id: string;
@@ -249,7 +270,21 @@ export interface Order {
 
   fulfillment?: FulfillmentType;
   paymentMethod?: PaymentMethod;
-  paymentStatus?: 'pending' | 'paid' | 'failed';
+  paymentStatus?: 'pending' | 'paid' | 'failed' | 'refunded';
+  /** Detalhes do pagamento online (Stripe) — nunca contém dados de cartão. */
+  payment?: PaymentInfo;
+  /** Gorjeta do entregador (checkout + pós-entrega). 100% vai para ele. */
+  tip?: number;
+  /** Parcela de gorjeta pós-entrega ainda não creditada no saldo do entregador. */
+  tipPendingCredit?: number;
+  /** PIN de 4 dígitos que o cliente informa ao entregador na entrega. */
+  deliveryPin?: string;
+  /** Token Expo de push do cliente para notificações transacionais. */
+  pushToken?: string;
+  /** Saldo da carteira usado como desconto neste pedido. */
+  walletUsed?: number;
+  /** Cashback deste pedido já creditado na carteira do cliente. */
+  cashbackCredited?: boolean;
   scheduledFor?: string | null;
   changeFor?: number | null;
   notes?: string;

@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, ScrollView, Pressable, Alert, Modal, Image, Linking } from 'react-native';
+import { View, Text, ScrollView, Pressable, Alert, Modal, Image, Linking, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import * as Clipboard from 'expo-clipboard';
 import {
   ArrowLeft,
   MessageCircle,
@@ -14,7 +13,6 @@ import {
   Check,
   AlertTriangle,
   QrCode,
-  Copy,
   MapPin,
   Store,
   Package,
@@ -46,6 +44,8 @@ import { customerStatus } from '../../src/components/ui/Badge';
 import { pickImage } from '../../src/lib/images';
 import { successHaptic } from '../../src/lib/notifications';
 import { PAYMENT_SHORT } from '../../src/lib/payments';
+import { PayOnlineSheet } from '../../src/components/PayOnlineSheet';
+import { DeliveryPinBanner, TipSheet, ItemIssueSheet } from '../../src/components/OrderExtras';
 import { useReorder } from '../../src/hooks/useReorder';
 import type { Order, PublicDriver } from '../../src/lib/types';
 
@@ -63,6 +63,8 @@ export default function OrderScreen() {
   const [showSub, setShowSub] = useState(false);
   const [showRate, setShowRate] = useState(params.rate === '1');
   const [showPix, setShowPix] = useState(false);
+  const [showTip, setShowTip] = useState(false);
+  const [showIssue, setShowIssue] = useState(false);
   const reorder = useReorder();
 
   useEffect(() => {
@@ -95,8 +97,13 @@ export default function OrderScreen() {
   const cancelled = order.status === 'cancelled';
   const isDelivery = order.fulfillment !== 'pickup';
   const canCancel = order.status === 'pending' && !cancelled && !finished;
+  const onlineMethod =
+    order.paymentMethod === 'pix' ||
+    order.paymentMethod === 'card_online' ||
+    order.paymentMethod === 'picpay' ||
+    order.paymentMethod === 'nupay';
   const paymentPending =
-    (order.paymentMethod === 'pix' || order.paymentMethod === 'card_online') && order.paymentStatus !== 'paid' && !cancelled;
+    onlineMethod && order.paymentStatus !== 'paid' && order.paymentStatus !== 'refunded' && !cancelled;
 
   // Live map: driver -> customer
   const driverLoc = order.driverLocation || driver?.location;
@@ -143,8 +150,23 @@ export default function OrderScreen() {
 
         {/* Payment pending (PIX expiration alternative flow) */}
         {paymentPending ? (
-          <PaymentPending order={order} colors={colors} onPay={() => setShowPix(true)} onMarkPaid={() => markPaid(order)} />
+          <PaymentPending order={order} colors={colors} onPay={() => setShowPix(true)} />
         ) : null}
+
+        {/* Refund confirmation */}
+        {order.paymentStatus === 'refunded' ? (
+          <View style={{ backgroundColor: colors.primarySoft, borderRadius: radius.lg, padding: spacing.md, gap: 4 }}>
+            <Text style={{ color: colors.primaryDark, fontWeight: font.black }}>Pagamento estornado</Text>
+            <Text style={{ color: colors.primaryDark, fontSize: fontSize.sm }}>
+              {order.payment?.refundedAmount
+                ? `${brl(order.payment.refundedAmount)} devolvidos para a forma de pagamento original.`
+                : 'O valor foi devolvido para a forma de pagamento original.'}
+            </Text>
+          </View>
+        ) : null}
+
+        {/* Código de confirmação da entrega (PIN) */}
+        {isDelivery && !cancelled && !finished ? <DeliveryPinBanner order={order} /> : null}
 
         {/* Substitution alert */}
         {needsSubstitutionReview(order) ? (
@@ -240,7 +262,10 @@ export default function OrderScreen() {
             <Text style={{ color: colors.text, fontWeight: font.black }}>Total</Text>
             <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg }}>{brl(order.total)}</Text>
           </View>
-          <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs }}>{paymentLabel(order.paymentMethod)} {order.paymentStatus === 'paid' ? '• Pago' : ''}</Text>
+          <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs }}>
+            {paymentLabel(order.paymentMethod)}{' '}
+            {order.paymentStatus === 'paid' ? '• Pago' : order.paymentStatus === 'refunded' ? '• Estornado' : ''}
+          </Text>
         </Card>
 
         {/* Communication */}
@@ -251,6 +276,23 @@ export default function OrderScreen() {
           </View>
         ) : null}
 
+        {/* Segurança: compartilhar acompanhamento em tempo real */}
+        {isDelivery && !cancelled && !finished ? (
+          <Button
+            label="Compartilhar acompanhamento"
+            variant="ghost"
+            onPress={() =>
+              Share.share({
+                message:
+                  `Estou acompanhando meu pedido #${order.id.slice(0, 6).toUpperCase()} de ${order.storeName || 'uma loja Nexmarket'}. ` +
+                  `Status: ${status.label}.` +
+                  (order.driverName ? ` Entregador: ${order.driverName}.` : '') +
+                  ` Acompanhe: nexcliente://order/${order.id}?sm=${order.supermarketId}`,
+              }).catch(() => {})
+            }
+          />
+        ) : null}
+
         {/* Rating (delivered) */}
         {finished && !order.rating ? (
           <Button label="Avaliar pedido" icon={<Star size={18} color="#fff" />} onPress={() => setShowRate(true)} />
@@ -259,6 +301,23 @@ export default function OrderScreen() {
             <Text style={{ color: colors.text, fontWeight: font.bold }}>Sua avaliação</Text>
             <StarRating value={order.rating} readOnly size={20} />
           </Card>
+        ) : null}
+
+        {/* Pós-entrega: gorjeta + problema com itens */}
+        {finished && !cancelled && order.driverId ? (
+          <Button
+            label={order.tip ? `Dar mais gorjeta (já enviou ${brl(order.tip)})` : 'Dar gorjeta ao entregador 💚'}
+            variant="secondary"
+            onPress={() => setShowTip(true)}
+          />
+        ) : null}
+        {finished && !cancelled && order.paymentStatus === 'paid' ? (
+          <Button
+            label="Problema com algum item?"
+            variant="ghost"
+            textStyle={{ color: colors.textMuted }}
+            onPress={() => setShowIssue(true)}
+          />
         ) : null}
 
         {/* Repeat / cancel */}
@@ -286,15 +345,39 @@ export default function OrderScreen() {
       {/* Rating modal */}
       <RatingModal visible={showRate} order={order} colors={colors} onClose={() => setShowRate(false)} />
 
-      {/* PIX modal */}
-      <PixModal visible={showPix} order={order} colors={colors} onClose={() => setShowPix(false)} />
+      {/* Gorjeta pós-entrega */}
+      <TipSheet visible={showTip} order={order} onClose={() => setShowTip(false)} />
+
+      {/* Problema com itens (reembolso self-service) */}
+      <ItemIssueSheet visible={showIssue} order={order} onClose={() => setShowIssue(false)} />
+
+      {/* Pagamento online (PIX / cartão via Stripe) */}
+      <PayOnlineSheet
+        visible={showPix}
+        method={onlineMethod ? order.paymentMethod! : null}
+        smId={order.supermarketId}
+        orderId={order.id}
+        total={order.total}
+        storeName={order.storeName}
+        onDone={async (paid, info) => {
+          setShowPix(false);
+          if (paid) {
+            try {
+              await markPaid(order, info);
+            } catch {
+              // webhook do servidor já pode ter gravado o status
+            }
+            Alert.alert('Pagamento confirmado', 'Recebemos seu pagamento. A loja já pode separar seu pedido!');
+          }
+        }}
+      />
     </SafeAreaView>
   );
 }
 
 /* --------------------------- Payment pending --------------------------- */
 
-function PaymentPending({ order, colors, onPay, onMarkPaid }: { order: Order; colors: any; onPay: () => void; onMarkPaid: () => void }) {
+function PaymentPending({ order, colors, onPay }: { order: Order; colors: any; onPay: () => void }) {
   const [left, setLeft] = useState(15 * 60);
   useEffect(() => {
     const created = order.createdAt?.toMillis?.() || order.createdAt?.seconds * 1000 || Date.now();
@@ -468,51 +551,6 @@ function RatingModal({ visible, order, colors, onClose }: { visible: boolean; or
             <Input placeholder="Conte mais para a loja (opcional)" value={comment} onChangeText={setComment} multiline style={{ height: 80, textAlignVertical: 'top' }} />
             <Button label="Enviar avaliação" size="lg" loading={busy} disabled={stars === 0 || (needsPhoto && !photo)} onPress={submit} />
           </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-/* --------------------------- PIX modal --------------------------- */
-
-function PixModal({ visible, order, colors, onClose }: { visible: boolean; order: Order; colors: any; onClose: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const pixCode = `00020126BR.GOV.BCB.PIX${order.id}520400005303986540${Math.round(order.total * 100)}5802BR6009NEXMARKET6304NEX1`;
-  const isPix = order.paymentMethod === 'pix';
-
-  const confirm = async () => {
-    setBusy(true);
-    try {
-      await markPaid(order);
-      onClose();
-      Alert.alert('Pagamento confirmado', 'Recebemos seu pagamento. A loja já pode separar seu pedido!');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}>
-        <View style={{ backgroundColor: colors.card, borderTopLeftRadius: radius['2xl'], borderTopRightRadius: radius['2xl'], padding: spacing.lg, gap: spacing.md }}>
-          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>{isPix ? 'Pague com PIX' : 'Pagamento online'}</Text>
-          {isPix ? (
-            <>
-              <View style={{ alignSelf: 'center', width: 170, height: 170, borderRadius: radius.lg, backgroundColor: '#fff', borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
-                <QrCode size={110} color="#0F172A" />
-              </View>
-              <Pressable onPress={async () => { await Clipboard.setStringAsync(pixCode); Alert.alert('Copiado!', 'Código PIX copiado.'); }} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: radius.md, borderWidth: 2, borderColor: colors.border, padding: spacing.md }}>
-                <Copy size={18} color={colors.primary} />
-                <Text style={{ color: colors.primary, fontWeight: font.bold }}>Copiar código PIX</Text>
-              </Pressable>
-            </>
-          ) : (
-            <Text style={{ color: colors.textMuted }}>Pagamento processado com segurança pela provedora. Não armazenamos os dados do cartão.</Text>
-          )}
-          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg, textAlign: 'center' }}>{brl(order.total)}</Text>
-          <Button label="Já fiz o pagamento" size="lg" loading={busy} onPress={confirm} />
-          <Button label="Fechar" variant="ghost" onPress={onClose} />
         </View>
       </View>
     </Modal>

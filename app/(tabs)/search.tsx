@@ -1,17 +1,20 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { View, Text, FlatList, Pressable, ScrollView, Modal } from 'react-native';
+import { View, Text, FlatList, Pressable, ScrollView, Modal, Image, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { Search as SearchIcon, SlidersHorizontal, X, Check } from 'lucide-react-native';
+import { Search as SearchIcon, SlidersHorizontal, X, Check, Store, ArrowRight } from 'lucide-react-native';
 
 import { useColors } from '../../src/hooks/useColors';
 import { font, fontSize, radius, spacing } from '../../src/lib/theme';
+import { brl } from '../../src/lib/format';
 import { Input } from '../../src/components/ui/Input';
 import { Button } from '../../src/components/ui/Button';
 import { ProductCard } from '../../src/components/ProductCard';
 import { CartBar } from '../../src/components/CartBar';
 import { useAppStore } from '../../src/store/useAppStore';
+import { useCartStore } from '../../src/store/useCartStore';
 import { filterProducts, collectBrands, collectTags, ProductFilters, normalize } from '../../src/lib/search';
+import { searchAllStores, type StoreHits } from '../../src/lib/multiStoreSearch';
 import { hasDiscount } from '../../src/lib/promotions';
 
 export default function SearchScreen() {
@@ -33,6 +36,44 @@ export default function SearchScreen() {
     tags: [],
   });
   const [showFilters, setShowFilters] = useState(false);
+
+  // Escopo: buscar só nesta loja ou em TODAS as lojas da plataforma.
+  const [scope, setScope] = useState<'store' | 'all'>('store');
+  const [allHits, setAllHits] = useState<StoreHits[]>([]);
+  const [allLoading, setAllLoading] = useState(false);
+  const setCurrentSmId = useAppStore((s) => s.setCurrentSmId);
+  const currentSmId = useAppStore((s) => s.currentSmId);
+  const clearCart = useCartStore((s) => s.clear);
+
+  useEffect(() => {
+    if (scope !== 'all' || search.trim().length < 2) {
+      setAllHits([]);
+      return;
+    }
+    let cancelled = false;
+    setAllLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const hits = await searchAllStores(search);
+        if (!cancelled) setAllHits(hits);
+      } catch {
+        if (!cancelled) setAllHits([]);
+      } finally {
+        if (!cancelled) setAllLoading(false);
+      }
+    }, 450);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [scope, search]);
+
+  const switchToStore = (smId: string, storeName: string) => {
+    if (smId === currentSmId) return;
+    clearCart();
+    setCurrentSmId(smId);
+    router.replace('/(tabs)');
+  };
 
   useEffect(() => {
     if (params.gondola) setFilters((f) => ({ ...f, gondolaId: String(params.gondola) }));
@@ -96,18 +137,36 @@ export default function SearchScreen() {
         </Pressable>
       </View>
 
-      {/* Category chips */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>
-        <Chip label="Todos" active={!filters.gondolaId} onPress={() => setFilters((f) => ({ ...f, gondolaId: null }))} colors={colors} />
-        <Chip label="🔥 Promoções" active={!!filters.onlyPromo} onPress={() => setFilters((f) => ({ ...f, onlyPromo: !f.onlyPromo }))} colors={colors} />
-        {gondolas.map((g) => (
-          <Chip key={g.id} label={g.name} active={filters.gondolaId === g.id} onPress={() => setFilters((f) => ({ ...f, gondolaId: f.gondolaId === g.id ? null : g.id }))} colors={colors} />
-        ))}
-      </ScrollView>
+      {/* Escopo da busca: loja atual × todas as lojas */}
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Chip label="Nesta loja" active={scope === 'store'} onPress={() => setScope('store')} colors={colors} />
+        <Chip label="🌎 Em todas as lojas" active={scope === 'all'} onPress={() => setScope('all')} colors={colors} />
+      </View>
 
-      <Text style={{ color: colors.textMuted, fontWeight: font.bold, fontSize: fontSize.sm }}>
-        {results.length} produto{results.length === 1 ? '' : 's'}
-      </Text>
+      {scope === 'store' ? (
+        <>
+          {/* Category chips */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>
+            <Chip label="Todos" active={!filters.gondolaId} onPress={() => setFilters((f) => ({ ...f, gondolaId: null }))} colors={colors} />
+            <Chip label="🔥 Promoções" active={!!filters.onlyPromo} onPress={() => setFilters((f) => ({ ...f, onlyPromo: !f.onlyPromo }))} colors={colors} />
+            {gondolas.map((g) => (
+              <Chip key={g.id} label={g.name} active={filters.gondolaId === g.id} onPress={() => setFilters((f) => ({ ...f, gondolaId: f.gondolaId === g.id ? null : g.id }))} colors={colors} />
+            ))}
+          </ScrollView>
+
+          <Text style={{ color: colors.textMuted, fontWeight: font.bold, fontSize: fontSize.sm }}>
+            {results.length} produto{results.length === 1 ? '' : 's'}
+          </Text>
+        </>
+      ) : (
+        <Text style={{ color: colors.textMuted, fontWeight: font.bold, fontSize: fontSize.sm }}>
+          {search.trim().length < 2
+            ? 'Digite o que procura (ex.: leite) para comparar preços entre as lojas.'
+            : allLoading
+              ? 'Comparando preços…'
+              : `${allHits.length} loja${allHits.length === 1 ? '' : 's'} com "${search.trim()}"`}
+        </Text>
+      )}
     </View>
   );
 
@@ -116,36 +175,90 @@ export default function SearchScreen() {
       <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.sm }}>
         <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize['2xl'], marginBottom: spacing.sm }}>{favMode ? 'Favoritos ❤️' : 'Buscar'}</Text>
       </View>
-      <FlatList
-        data={results}
-        keyExtractor={(p) => p.id}
-        numColumns={2}
-        columnWrapperStyle={{ gap: spacing.md, paddingHorizontal: spacing.lg }}
-        contentContainerStyle={{ gap: spacing.md, paddingBottom: 120 }}
-        ListHeaderComponent={<View style={{ paddingHorizontal: spacing.lg }}>{Header}</View>}
-        keyboardShouldPersistTaps="handled"
-        renderItem={({ item }) => (
-          <View style={{ flex: 1, maxWidth: '48%' }}>
-            <ProductCard product={item} onPress={() => router.push(`/product/${item.id}`)} />
-          </View>
-        )}
-        ListEmptyComponent={
-          <View style={{ alignItems: 'center', paddingVertical: spacing['3xl'], paddingHorizontal: spacing.lg, gap: 10 }}>
-            <SearchIcon size={40} color={colors.textSubtle} />
-            <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg, textAlign: 'center' }}>Nenhum produto encontrado</Text>
-            {suggestion ? (
-              <Pressable onPress={() => setSearch(suggestion)}>
-                <Text style={{ color: colors.textMuted, textAlign: 'center' }}>
-                  Você quis dizer <Text style={{ color: colors.primary, fontWeight: font.black }}>{suggestion}</Text>?
-                </Text>
+      {scope === 'all' ? (
+        <FlatList
+          data={allHits}
+          keyExtractor={(h) => h.smId}
+          contentContainerStyle={{ gap: spacing.md, paddingBottom: 120, paddingHorizontal: spacing.lg }}
+          ListHeaderComponent={Header}
+          keyboardShouldPersistTaps="handled"
+          renderItem={({ item: hit }) => (
+            <View style={{ borderRadius: radius.xl, borderWidth: 2, borderColor: hit.smId === currentSmId ? colors.primary : colors.border, backgroundColor: colors.card, padding: spacing.md, gap: spacing.sm }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={{ width: 38, height: 38, borderRadius: radius.md, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                  {hit.storeLogoUrl ? <Image source={{ uri: hit.storeLogoUrl }} style={{ width: '100%', height: '100%' }} resizeMode="contain" /> : <Store size={18} color={colors.primary} />}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontWeight: font.black }}>{hit.storeName}</Text>
+                  <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs }}>a partir de {brl(hit.bestPrice)}</Text>
+                </View>
+                {hit.smId === currentSmId ? (
+                  <Text style={{ color: colors.primary, fontWeight: font.bold, fontSize: fontSize.xs }}>Loja atual</Text>
+                ) : (
+                  <Pressable onPress={() => switchToStore(hit.smId, hit.storeName)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.primary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.full }}>
+                    <Text style={{ color: '#fff', fontWeight: font.bold, fontSize: fontSize.xs }}>Comprar aqui</Text>
+                    <ArrowRight size={13} color="#fff" />
+                  </Pressable>
+                )}
+              </View>
+              {hit.products.map((p) => (
+                <View key={p.id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4, borderTopWidth: 1, borderTopColor: colors.border }}>
+                  <Text numberOfLines={1} style={{ flex: 1, color: colors.textMuted, fontWeight: font.medium, marginRight: 8 }}>{p.name}</Text>
+                  <Text style={{ color: colors.text, fontWeight: font.black }}>{brl(p.price)}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          ListEmptyComponent={
+            allLoading ? (
+              <View style={{ alignItems: 'center', paddingVertical: spacing['3xl'], gap: 10 }}>
+                <ActivityIndicator color={colors.primary} />
+                <Text style={{ color: colors.textMuted }}>Comparando preços em todas as lojas…</Text>
+              </View>
+            ) : search.trim().length >= 2 ? (
+              <View style={{ alignItems: 'center', paddingVertical: spacing['3xl'], gap: 10 }}>
+                <SearchIcon size={40} color={colors.textSubtle} />
+                <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg, textAlign: 'center' }}>Nenhuma loja tem "{search.trim()}"</Text>
+                <Text style={{ color: colors.textMuted, textAlign: 'center' }}>Tente outro termo.</Text>
+              </View>
+            ) : null
+          }
+        />
+      ) : (
+        <FlatList
+          data={results}
+          keyExtractor={(p) => p.id}
+          numColumns={2}
+          columnWrapperStyle={{ gap: spacing.md, paddingHorizontal: spacing.lg }}
+          contentContainerStyle={{ gap: spacing.md, paddingBottom: 120 }}
+          ListHeaderComponent={<View style={{ paddingHorizontal: spacing.lg }}>{Header}</View>}
+          keyboardShouldPersistTaps="handled"
+          renderItem={({ item }) => (
+            <View style={{ flex: 1, maxWidth: '48%' }}>
+              <ProductCard product={item} onPress={() => router.push(`/product/${item.id}`)} />
+            </View>
+          )}
+          ListEmptyComponent={
+            <View style={{ alignItems: 'center', paddingVertical: spacing['3xl'], paddingHorizontal: spacing.lg, gap: 10 }}>
+              <SearchIcon size={40} color={colors.textSubtle} />
+              <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg, textAlign: 'center' }}>Nenhum produto encontrado</Text>
+              {suggestion ? (
+                <Pressable onPress={() => setSearch(suggestion)}>
+                  <Text style={{ color: colors.textMuted, textAlign: 'center' }}>
+                    Você quis dizer <Text style={{ color: colors.primary, fontWeight: font.black }}>{suggestion}</Text>?
+                  </Text>
+                </Pressable>
+              ) : (
+                <Text style={{ color: colors.textMuted, textAlign: 'center' }}>Tente outro termo ou ajuste os filtros.</Text>
+              )}
+              <Pressable onPress={() => setScope('all')}>
+                <Text style={{ color: colors.primary, fontWeight: font.bold, textAlign: 'center' }}>Buscar em todas as lojas →</Text>
               </Pressable>
-            ) : (
-              <Text style={{ color: colors.textMuted, textAlign: 'center' }}>Tente outro termo ou ajuste os filtros.</Text>
-            )}
-            {activeFilterCount ? <Button label="Limpar filtros" variant="secondary" fullWidth={false} onPress={clearFilters} style={{ marginTop: 8 }} /> : null}
-          </View>
-        }
-      />
+              {activeFilterCount ? <Button label="Limpar filtros" variant="secondary" fullWidth={false} onPress={clearFilters} style={{ marginTop: 8 }} /> : null}
+            </View>
+          }
+        />
+      )}
 
       <CartBar />
 

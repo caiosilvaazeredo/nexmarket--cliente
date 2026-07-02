@@ -21,6 +21,8 @@ import { useAppStore, selectActiveOrders } from '../../src/store/useAppStore';
 import { useCartStore } from '../../src/store/useCartStore';
 import { ProductCard } from '../../src/components/ProductCard';
 import { CartBar } from '../../src/components/CartBar';
+import { RailSkeleton } from '../../src/components/Skeleton';
+import { EmptyState } from '../../src/components/EmptyState';
 import { customerStatus } from '../../src/components/ui/Badge';
 import { hasDiscount } from '../../src/lib/promotions';
 import { isStoreOpenNow, freeShippingHint } from '../../src/lib/storeHours';
@@ -37,6 +39,8 @@ export default function Home() {
   const storeInfo = useAppStore((s) => s.storeInfo);
   const deliveryConfig = useAppStore((s) => s.deliveryConfig);
   const customer = useAppStore((s) => s.customer);
+  const myOrders = useAppStore((s) => s.myOrders);
+  const catalogLoaded = useAppStore((s) => s.catalogLoaded);
   const activeOrders = useAppStore(selectActiveOrders);
   const cartSubtotalLines = useCartStore((s) => s.lines);
 
@@ -47,6 +51,45 @@ export default function Home() {
     () => products.filter((p) => p.active !== false && hasDiscount(p, promotions)).slice(0, 10),
     [products, promotions],
   );
+
+  // "Compre de novo": itens mais frequentes do histórico que existem nesta loja.
+  const buyAgain = useMemo(() => {
+    const freq = new Map<string, number>();
+    myOrders.forEach((o) =>
+      (o.items || []).forEach((it) => {
+        if (it.productId) freq.set(it.productId, (freq.get(it.productId) || 0) + it.quantity);
+      }),
+    );
+    return products
+      .filter((p) => p.active !== false && freq.has(p.id))
+      .sort((a, b) => (freq.get(b.id) || 0) - (freq.get(a.id) || 0))
+      .slice(0, 10);
+  }, [myOrders, products]);
+
+  // "Mais vendidos" da loja (campo salesCount alimentado pelo painel da loja).
+  const bestSellers = useMemo(
+    () =>
+      products
+        .filter((p) => p.active !== false && (p.salesCount || 0) > 0)
+        .sort((a, b) => (b.salesCount || 0) - (a.salesCount || 0))
+        .slice(0, 10),
+    [products],
+  );
+
+  // Vitrine por horário do dia (estilo iFood).
+  const daypart = useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 10) return { title: 'Para o seu café da manhã', emoji: '☕', words: ['cafe', 'pao', 'leite', 'queijo', 'presunto', 'iogurte', 'fruta', 'suco', 'manteiga', 'granola'] };
+    if (h < 15) return { title: 'Para o almoço de hoje', emoji: '🍝', words: ['arroz', 'feijao', 'carne', 'frango', 'massa', 'macarrao', 'molho', 'salada', 'legume', 'tempero'] };
+    if (h < 19) return { title: 'Para o lanche da tarde', emoji: '🥪', words: ['bolo', 'biscoito', 'cafe', 'chocolate', 'pao', 'salgadinho', 'refrigerante', 'suco'] };
+    return { title: 'Para o seu jantar', emoji: '🌙', words: ['pizza', 'massa', 'sopa', 'lasanha', 'vinho', 'cerveja', 'queijo', 'pao', 'congelado'] };
+  }, []);
+  const daypartItems = useMemo(() => {
+    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    return products
+      .filter((p) => p.active !== false && daypart.words.some((w) => norm(p.name).includes(w)))
+      .slice(0, 10);
+  }, [products, daypart]);
 
   const subtotal = useMemo(() => {
     // light estimate for the free-shipping hint (uses base prices)
@@ -110,6 +153,21 @@ export default function Home() {
       </View>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 120, gap: spacing.lg }} showsVerticalScrollIndicator={false}>
+        {/* Endereço primeiro (estilo iFood): frete e disponibilidade corretos */}
+        {customer && !defaultAddress ? (
+          <Pressable
+            onPress={() => router.push('/address-edit')}
+            style={{ marginHorizontal: spacing.lg, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.amberSoft, borderRadius: radius.lg, borderWidth: 2, borderColor: colors.amber, padding: spacing.md }}
+          >
+            <MapPin size={20} color="#92400E" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: '#92400E', fontWeight: font.black }}>Onde você está?</Text>
+              <Text style={{ color: '#92400E', fontSize: fontSize.sm }}>Adicione seu endereço para ver frete e disponibilidade certos.</Text>
+            </View>
+            <ChevronRight size={18} color="#92400E" />
+          </Pressable>
+        ) : null}
+
         {/* Store status / free shipping */}
         <View style={{ paddingHorizontal: spacing.lg, flexDirection: 'row', gap: spacing.sm }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: open ? colors.primarySoft : colors.dangerSoft, paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.full }}>
@@ -170,12 +228,54 @@ export default function Home() {
           </View>
         ) : null}
 
+        {/* Compre de novo (recomendações do histórico) */}
+        {buyAgain.length > 0 ? (
+          <View style={{ gap: spacing.sm }}>
+            <SectionHeader title="Compre de novo" emoji="🔁" colors={colors} />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.md }}>
+              {buyAgain.map((p) => (
+                <View key={p.id} style={{ width: 150 }}>
+                  <ProductCard product={p} onPress={() => router.push(`/product/${p.id}`)} />
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
         {/* Offers carousel */}
         {onSale.length > 0 ? (
           <View style={{ gap: spacing.sm }}>
             <SectionHeader title="Ofertas do dia" emoji="🔥" colors={colors} onSeeAll={() => router.push('/(tabs)/search?promo=1')} />
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.md }}>
               {onSale.map((p) => (
+                <View key={p.id} style={{ width: 150 }}>
+                  <ProductCard product={p} onPress={() => router.push(`/product/${p.id}`)} />
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
+        {/* Vitrine por horário do dia */}
+        {daypartItems.length > 0 ? (
+          <View style={{ gap: spacing.sm }}>
+            <SectionHeader title={daypart.title} emoji={daypart.emoji} colors={colors} />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.md }}>
+              {daypartItems.map((p) => (
+                <View key={p.id} style={{ width: 150 }}>
+                  <ProductCard product={p} onPress={() => router.push(`/product/${p.id}`)} />
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
+        {/* Mais vendidos */}
+        {bestSellers.length > 0 ? (
+          <View style={{ gap: spacing.sm }}>
+            <SectionHeader title="Mais vendidos" emoji="🏆" colors={colors} />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.md }}>
+              {bestSellers.map((p) => (
                 <View key={p.id} style={{ width: 150 }}>
                   <ProductCard product={p} onPress={() => router.push(`/product/${p.id}`)} />
                 </View>
@@ -198,11 +298,20 @@ export default function Home() {
           </View>
         ))}
 
-        {products.length === 0 ? (
-          <View style={{ alignItems: 'center', paddingVertical: spacing['3xl'], gap: 8 }}>
-            <ShoppingBasket size={40} color={colors.textSubtle} />
-            <Text style={{ color: colors.textMuted, fontWeight: font.medium }}>Esta loja ainda não tem produtos.</Text>
-          </View>
+        {/* Skeletons enquanto o catálogo carrega; vazio acionável depois */}
+        {!catalogLoaded && products.length === 0 ? (
+          <>
+            <RailSkeleton />
+            <RailSkeleton />
+          </>
+        ) : products.length === 0 ? (
+          <EmptyState
+            icon={<ShoppingBasket size={40} color={colors.textSubtle} />}
+            title="Esta loja ainda não tem produtos"
+            subtitle="Explore outras lojas da sua região enquanto isso."
+            actionLabel="Ver outras lojas"
+            onAction={() => router.replace('/store-picker')}
+          />
         ) : null}
       </ScrollView>
 

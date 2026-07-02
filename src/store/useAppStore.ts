@@ -26,6 +26,8 @@ interface AppState {
 
   supermarkets: Supermarket[];
   currentSmId: string | null;
+  /** Primeiro snapshot do catálogo já chegou (controla skeletons na home). */
+  catalogLoaded: boolean;
 
   supermarket: Supermarket | null;
   gondolas: Gondola[];
@@ -48,6 +50,7 @@ interface AppState {
   setSupermarket: (s: Supermarket | null) => void;
   setGondolas: (g: Gondola[]) => void;
   setProducts: (p: Product[]) => void;
+  setCatalogLoaded: (v: boolean) => void;
   setPromotions: (p: Promotion[]) => void;
   setDeliveryConfig: (c: DeliveryConfig | null) => void;
   setStoreInfo: (c: StoreInfo | null) => void;
@@ -69,6 +72,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   supermarkets: [],
   currentSmId: null,
+  catalogLoaded: false,
 
   supermarket: null,
   gondolas: [],
@@ -91,6 +95,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSupermarket: (supermarket) => set({ supermarket, brand: recomputeBrand(supermarket, get().appConfig) }),
   setGondolas: (gondolas) => set({ gondolas }),
   setProducts: (products) => set({ products }),
+  setCatalogLoaded: (catalogLoaded) => set({ catalogLoaded }),
   setPromotions: (promotions) => set({ promotions }),
   setDeliveryConfig: (deliveryConfig) => set({ deliveryConfig }),
   setStoreInfo: (storeInfo) => set({ storeInfo }),

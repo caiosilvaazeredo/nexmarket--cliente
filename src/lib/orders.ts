@@ -9,6 +9,7 @@ import {
   setDoc,
   updateDoc,
   serverTimestamp,
+  increment,
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 import type {
@@ -163,6 +164,12 @@ export interface PlaceOrderInput {
   scheduledFor?: string | null;
   changeFor?: number | null;
   notes?: string;
+  /** Gorjeta escolhida no checkout (já somada em `total`). */
+  tip?: number;
+  /** Saldo da carteira usado como desconto (já abatido de `total`). */
+  walletUsed?: number;
+  /** Token Expo de push para notificações de status. */
+  pushToken?: string | null;
 }
 
 function genId(): string {
@@ -217,10 +224,38 @@ export async function placeOrder(input: PlaceOrderInput): Promise<string> {
   if (isDelivery) {
     payload.deliveryStatus = 'awaiting_driver';
     payload.deliveryAddress = input.deliveryAddress || {};
+    payload.tip = input.tip || 0;
+    // PIN de confirmação de entrega: o cliente informa ao entregador (RF anti-fraude).
+    payload.deliveryPin = String(Math.floor(1000 + Math.random() * 9000));
   }
+  if (input.pushToken) payload.pushToken = input.pushToken;
+  if (input.walletUsed && input.walletUsed > 0) payload.walletUsed = input.walletUsed;
 
   await setDoc(doc(db, `supermarkets/${input.supermarketId}/orders/${id}`), payload);
   return id;
+}
+
+/** Registra uma gorjeta pós-entrega (fica pendente de crédito para o entregador). */
+export async function addTip(order: Order, amount: number): Promise<void> {
+  await updateDoc(doc(db, `supermarkets/${order.supermarketId}/orders/${order.id}`), {
+    tip: increment(amount),
+    tipPendingCredit: increment(amount),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Marca itens como reportados e registra o problema (fluxo de reembolso). */
+export async function reportItemsProblem(
+  order: Order,
+  indices: number[],
+  note: string,
+): Promise<void> {
+  const items = order.items.map((it, idx) => (indices.includes(idx) ? { ...it, reported: true } : it));
+  await updateDoc(doc(db, `supermarkets/${order.supermarketId}/orders/${order.id}`), {
+    items,
+    problemReport: { type: 'items', note, reportedAt: Date.now(), by: 'customer' },
+    updatedAt: serverTimestamp(),
+  });
 }
 
 /** Respond to the store's substitution suggestions (Fase 4 of the journey). */
@@ -261,10 +296,24 @@ export async function cancelOrder(order: Order): Promise<void> {
   });
 }
 
-/** Confirm an online/PIX payment (gateway-ready stub — RNF10). */
-export async function markPaid(order: Order): Promise<void> {
+/**
+ * Confirm an online/PIX payment. With Stripe the webhook do servidor também
+ * grava este status; a escrita aqui garante o funcionamento mesmo sem
+ * service account no servidor (RNF10 — nunca gravamos dados de cartão).
+ */
+export async function markPaid(
+  order: Order,
+  info?: { paymentIntentId?: string; checkoutSessionId?: string; provider?: string },
+): Promise<void> {
   await updateDoc(doc(db, `supermarkets/${order.supermarketId}/orders/${order.id}`), {
     paymentStatus: 'paid',
+    payment: {
+      provider: info?.provider || (info?.paymentIntentId || info?.checkoutSessionId ? 'stripe' : 'demo'),
+      status: 'paid',
+      ...(info?.paymentIntentId ? { paymentIntentId: info.paymentIntentId } : {}),
+      ...(info?.checkoutSessionId ? { checkoutSessionId: info.checkoutSessionId } : {}),
+      paidAt: new Date().toISOString(),
+    },
     updatedAt: serverTimestamp(),
   });
 }

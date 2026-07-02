@@ -1,5 +1,7 @@
 # 🛒 Nexmarket Cliente
 
+> 📘 **[MANUAL.md](./MANUAL.md)** — como rodar, buildar (EAS) e publicar o app, e como ativar o **pagamento real via Stripe** (cartão + PIX).
+
 App do **cliente** da plataforma **Nexmarket**, no estilo *iFood / Uber Eats*,
 **totalmente integrado** ao painel da loja (`nexmarket--loja`) e ao app do
 entregador (`nexmarket--entregador`): os três compartilham o **mesmo projeto

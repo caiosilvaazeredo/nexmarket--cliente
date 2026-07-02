@@ -1,8 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, Alert, Modal, Image } from 'react-native';
+import { View, Text, ScrollView, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import * as Clipboard from 'expo-clipboard';
 import {
   ArrowLeft,
   Bike,
@@ -14,25 +13,28 @@ import {
   Banknote,
   Ticket,
   Check,
-  ChevronRight,
-  Copy,
-  ShieldCheck,
   Plus,
+  Wallet,
 } from 'lucide-react-native';
 
 import { Button } from '../src/components/ui/Button';
 import { Input } from '../src/components/ui/Input';
+import { PayOnlineSheet } from '../src/components/PayOnlineSheet';
 import { useColors } from '../src/hooks/useColors';
 import { font, fontSize, radius, spacing, shadow } from '../src/lib/theme';
 import { brl, fullAddress } from '../src/lib/format';
 import { useAppStore } from '../src/store/useAppStore';
 import { useCartStore } from '../src/store/useCartStore';
 import { lineTotal, effectiveUnitPrice, applyCoupon } from '../src/lib/promotions';
-import { computeDeliveryFee, meetsMinimum } from '../src/lib/storeHours';
-import { placeOrder, markPaid, subscribeOrder } from '../src/lib/orders';
-import { maskCardNumber, maskExpiry, tokenizeCard } from '../src/lib/payments';
-import { successHaptic, warnHaptic } from '../src/lib/notifications';
+import { computeDeliveryFee, meetsMinimum, surgeActive } from '../src/lib/storeHours';
+import { placeOrder, markPaid } from '../src/lib/orders';
+import { spendWallet } from '../src/lib/wallet';
+import { getGatewayConfig, type GatewayPublicConfig } from '../src/lib/payments';
+import { successHaptic, getExpoPushToken } from '../src/lib/notifications';
 import type { PaymentMethod, FulfillmentType, Order } from '../src/lib/types';
+
+/** Métodos cobrados online (abrem a folha de pagamento após criar o pedido). */
+const ONLINE_METHODS: PaymentMethod[] = ['pix', 'card_online', 'picpay', 'nupay'];
 
 export default function Checkout() {
   const { colors } = useColors();
@@ -57,6 +59,9 @@ export default function Checkout() {
   const [payment, setPayment] = useState<PaymentMethod | null>(null);
   const [changeFor, setChangeFor] = useState('');
   const [notes, setNotes] = useState('');
+  const [tip, setTip] = useState(0);
+  const [tipCustom, setTipCustom] = useState('');
+  const [useWallet, setUseWallet] = useState(false);
   const [placing, setPlacing] = useState(false);
   const [payModal, setPayModal] = useState<{ orderId: string } | null>(null);
 
@@ -77,12 +82,28 @@ export default function Checkout() {
     const res = applyCoupon(couponCode, subtotal, promotions, { isFirstOrder: myOrders.length === 0, deliveryFee });
     return res.ok ? res.discount : couponDiscount || 0;
   }, [couponCode, subtotal, promotions, deliveryFee, myOrders.length, couponDiscount]);
-  const total = Math.max(0, subtotal + deliveryFee - discount);
+  // Gorjeta: 100% vai para o entregador; só em pedidos com entrega.
+  const tipValue = fulfillment === 'delivery' ? tip : 0;
+  const totalBeforeWallet = Math.max(0, subtotal + deliveryFee - discount) + tipValue;
+  // Carteira (cashback): saldo pode abater até o valor total do pedido.
+  const walletBalance = Number(customer?.walletBalance || 0);
+  const walletUsed = useWallet ? Math.min(walletBalance, totalBeforeWallet) : 0;
+  const total = Number(Math.max(0, totalBeforeWallet - walletUsed).toFixed(2));
+  const surge = surgeActive(deliveryConfig);
   const min = meetsMinimum(deliveryConfig, subtotal);
 
   const address = customer?.addresses?.find((a) => a.id === addressId) || null;
 
-  const paymentOptions = useMemo(() => buildPaymentOptions(storeInfo?.paymentMethods), [storeInfo]);
+  // Carteiras extras (PicPay/NuPay) aparecem apenas quando o servidor habilita.
+  const [gwConfig, setGwConfig] = useState<GatewayPublicConfig>({});
+  useEffect(() => {
+    getGatewayConfig().then(setGwConfig).catch(() => {});
+  }, []);
+
+  const paymentOptions = useMemo(
+    () => buildPaymentOptions(storeInfo?.paymentMethods, gwConfig.wallets),
+    [storeInfo, gwConfig],
+  );
 
   useEffect(() => {
     if (!payment && paymentOptions.length) setPayment(paymentOptions[0].method);
@@ -123,6 +144,7 @@ export default function Checkout() {
         imageUrl: l.product.imageUrl,
         unit: l.product.unit,
       }));
+      const pushToken = await getExpoPushToken();
       const orderId = await placeOrder({
         supermarketId: currentSmId!,
         items,
@@ -130,6 +152,9 @@ export default function Checkout() {
         deliveryFee,
         discount,
         total,
+        tip: tipValue,
+        walletUsed,
+        pushToken,
         couponCode: couponCode || undefined,
         fulfillment,
         paymentMethod: payment,
@@ -154,8 +179,18 @@ export default function Checkout() {
       });
       successHaptic();
 
-      if (payment === 'pix' || payment === 'card_online') {
+      // Debita o saldo da carteira usado neste pedido.
+      if (walletUsed > 0 && authUser) {
+        spendWallet(authUser.uid, walletUsed).catch(() => {});
+      }
+
+      if (ONLINE_METHODS.includes(payment) && total > 0) {
         setPayModal({ orderId });
+      } else if (ONLINE_METHODS.includes(payment) && total === 0) {
+        // Carteira cobriu tudo — nada a cobrar online.
+        await markPaid({ supermarketId: currentSmId!, id: orderId } as Order).catch(() => {});
+        clear();
+        router.replace(`/order/${orderId}?sm=${currentSmId}&new=1&paid=1`);
       } else {
         clear();
         router.replace(`/order/${orderId}?sm=${currentSmId}&new=1`);
@@ -236,9 +271,62 @@ export default function Checkout() {
           {payment === 'cash_delivery' ? (
             <Input label="Troco para quanto? (opcional)" placeholder="Ex: 100,00" keyboardType="numeric" value={changeFor} onChangeText={setChangeFor} icon={<Banknote size={18} color={colors.textSubtle} />} />
           ) : null}
+
+          {/* Carteira (cashback) como desconto */}
+          {walletBalance > 0 ? (
+            <Pressable
+              onPress={() => setUseWallet((v) => !v)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderRadius: radius.lg, borderWidth: 2, borderColor: useWallet ? colors.primary : colors.border, backgroundColor: useWallet ? colors.primarySoft : colors.card, padding: spacing.md }}
+            >
+              <View style={{ width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: useWallet ? colors.primary : colors.border, backgroundColor: useWallet ? colors.primary : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
+                {useWallet ? <Check size={14} color="#fff" /> : null}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontWeight: font.bold }}>Usar saldo da carteira</Text>
+                <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs }}>
+                  Você tem {brl(walletBalance)} de cashback disponível
+                </Text>
+              </View>
+              {useWallet ? <Text style={{ color: colors.primary, fontWeight: font.black }}>- {brl(walletUsed)}</Text> : null}
+            </Pressable>
+          ) : null}
         </Section>
 
-        {/* 5. Notes */}
+        {/* 5. Tip (delivery only) — 100% para o entregador */}
+        {fulfillment === 'delivery' ? (
+          <Section title="Gorjeta para o entregador" colors={colors}>
+            <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, marginTop: -4 }}>
+              100% do valor vai para quem faz a sua entrega. Você também pode dar gorjeta depois.
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {[0, 2, 5, 10].map((v) => (
+                <SlotChip
+                  key={v}
+                  label={v === 0 ? 'Sem gorjeta' : brl(v)}
+                  active={tip === v && !tipCustom}
+                  onPress={() => {
+                    setTip(v);
+                    setTipCustom('');
+                  }}
+                  colors={colors}
+                />
+              ))}
+            </ScrollView>
+            <Input
+              label="Outro valor (opcional)"
+              placeholder="Ex: 7,50"
+              keyboardType="numeric"
+              value={tipCustom}
+              onChangeText={(t) => {
+                setTipCustom(t);
+                const v = Number(t.replace(',', '.'));
+                setTip(Number.isFinite(v) && v > 0 ? Math.min(v, 200) : 0);
+              }}
+            />
+          </Section>
+        ) : null}
+
+        {/* 6. Notes */}
         <Section title="Observações (opcional)" colors={colors}>
           <Input placeholder="Ex: tocar a campainha, deixar na portaria…" value={notes} onChangeText={setNotes} />
         </Section>
@@ -255,7 +343,9 @@ export default function Checkout() {
             <View style={{ height: 1, backgroundColor: colors.border, marginVertical: 4 }} />
             <Row label="Subtotal" value={brl(subtotal)} colors={colors} />
             {discount > 0 ? <Row label="Desconto" value={`- ${brl(discount)}`} colors={colors} /> : null}
-            <Row label="Frete" value={deliveryFee > 0 ? brl(deliveryFee) : 'Grátis'} colors={colors} />
+            <Row label={surge ? 'Frete (alta demanda ⚡)' : 'Frete'} value={deliveryFee > 0 ? brl(deliveryFee) : 'Grátis'} colors={colors} />
+            {tipValue > 0 ? <Row label="Gorjeta do entregador" value={brl(tipValue)} colors={colors} /> : null}
+            {walletUsed > 0 ? <Row label="Saldo da carteira" value={`- ${brl(walletUsed)}`} colors={colors} /> : null}
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
               <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.base }}>Total</Text>
               <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>{brl(total)}</Text>
@@ -272,119 +362,32 @@ export default function Checkout() {
         <Button label="Confirmar pedido" size="lg" loading={placing} onPress={finalize} />
       </View>
 
-      {/* Payment modal (PIX / online card) */}
-      <PaymentModal
-        info={payModal}
-        method={payment}
-        total={total}
-        smId={currentSmId}
-        colors={colors}
-        onDone={(orderId, paid) => {
-          setPayModal(null);
-          clear();
-          router.replace(`/order/${orderId}?sm=${currentSmId}&new=1${paid ? '&paid=1' : ''}`);
-        }}
-      />
+      {/* Pagamento online (PIX / cartão) — Stripe real quando o servidor de
+          pagamentos está configurado; demonstração caso contrário. */}
+      {payModal ? (
+        <PayOnlineSheet
+          visible
+          method={payment}
+          smId={currentSmId!}
+          orderId={payModal.orderId}
+          total={total}
+          storeName={brandName}
+          onDone={async (paid, info) => {
+            const orderId = payModal.orderId;
+            setPayModal(null);
+            if (paid) {
+              try {
+                await markPaid({ supermarketId: currentSmId!, id: orderId } as Order, info);
+              } catch {
+                // webhook do servidor já pode ter gravado o status
+              }
+            }
+            clear();
+            router.replace(`/order/${orderId}?sm=${currentSmId}&new=1${paid ? '&paid=1' : ''}`);
+          }}
+        />
+      ) : null}
     </SafeAreaView>
-  );
-}
-
-/* --------------------------- Payment modal --------------------------- */
-
-function PaymentModal({
-  info,
-  method,
-  total,
-  smId,
-  colors,
-  onDone,
-}: {
-  info: { orderId: string } | null;
-  method: PaymentMethod | null;
-  total: number;
-  smId: string | null;
-  colors: any;
-  onDone: (orderId: string, paid: boolean) => void;
-}) {
-  const [order, setOrder] = useState<Order | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [card, setCard] = useState({ number: '', expiry: '', cvv: '' });
-  const pixCode = useMemo(
-    () => (info ? `00020126BR.GOV.BCB.PIX${info.orderId}5204000053039865802BR6009NEXMARKET${Math.round(total * 100)}6304NEX1` : ''),
-    [info, total],
-  );
-
-  useEffect(() => {
-    if (info && smId) {
-      const unsub = subscribeOrder(smId, info.orderId, setOrder);
-      return unsub;
-    }
-  }, [info?.orderId, smId]);
-
-  if (!info) return null;
-  const isPix = method === 'pix';
-
-  const confirm = async () => {
-    if (!order) return;
-    setBusy(true);
-    try {
-      // RNF10: card data is tokenized by the gateway and NEVER stored in our DB.
-      if (!isPix) {
-        await tokenizeCard(card);
-      }
-      await markPaid(order);
-      onDone(info.orderId, true);
-    } catch (e: any) {
-      warnHaptic();
-      Alert.alert('Pagamento não autorizado', e?.message || 'Tente outro cartão ou pague com PIX. Seu pedido foi mantido.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal visible transparent animationType="slide">
-      <View style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}>
-        <View style={{ backgroundColor: colors.card, borderTopLeftRadius: radius['2xl'], borderTopRightRadius: radius['2xl'], padding: spacing.lg, gap: spacing.md }}>
-          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>{isPix ? 'Pague com PIX' : 'Pagamento online'}</Text>
-          <Text style={{ color: colors.textMuted }}>{isPix ? 'Escaneie o QR Code ou use o PIX copia e cola. O pagamento expira em 15 minutos.' : 'Pagamento processado com segurança pela provedora. Não armazenamos os dados do seu cartão.'}</Text>
-
-          {isPix ? (
-            <>
-              <View style={{ alignSelf: 'center', width: 180, height: 180, borderRadius: radius.lg, backgroundColor: '#fff', borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
-                <QrCode size={120} color="#0F172A" />
-              </View>
-              <Pressable
-                onPress={async () => {
-                  await Clipboard.setStringAsync(pixCode);
-                  Alert.alert('Copiado!', 'Código PIX copiado. Cole no app do seu banco.');
-                }}
-                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: radius.md, borderWidth: 2, borderColor: colors.border, padding: spacing.md }}
-              >
-                <Copy size={18} color={colors.primary} />
-                <Text style={{ color: colors.primary, fontWeight: font.bold }}>Copiar código PIX</Text>
-              </Pressable>
-            </>
-          ) : (
-            <View style={{ gap: spacing.sm }}>
-              <Input label="Número do cartão" placeholder="0000 0000 0000 0000" keyboardType="number-pad" value={card.number} onChangeText={(t) => setCard((c) => ({ ...c, number: maskCardNumber(t) }))} />
-              <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-                <View style={{ flex: 1 }}><Input label="Validade" placeholder="MM/AA" keyboardType="number-pad" value={card.expiry} onChangeText={(t) => setCard((c) => ({ ...c, expiry: maskExpiry(t) }))} /></View>
-                <View style={{ flex: 1 }}><Input label="CVV" placeholder="123" keyboardType="number-pad" secureTextEntry value={card.cvv} onChangeText={(t) => setCard((c) => ({ ...c, cvv: t.replace(/\D/g, '').slice(0, 4) }))} /></View>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <ShieldCheck size={14} color={colors.primary} />
-                <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, flex: 1 }}>Dados protegidos e tokenizados pela provedora de pagamento (RNF10).</Text>
-              </View>
-            </View>
-          )}
-
-          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg, textAlign: 'center' }}>{brl(total)}</Text>
-          <Button label={isPix ? 'Já fiz o pagamento' : 'Pagar agora'} size="lg" loading={busy} onPress={confirm} />
-          <Button label="Pagar depois" variant="ghost" onPress={() => onDone(info.orderId, false)} />
-        </View>
-      </View>
-    </Modal>
   );
 }
 
@@ -397,11 +400,13 @@ interface PayOpt {
   icon: (color: string) => React.ReactNode;
 }
 
-function buildPaymentOptions(pm?: any): PayOpt[] {
+function buildPaymentOptions(pm?: any, wallets?: { picpay?: boolean; nupay?: boolean }): PayOpt[] {
   const opts: PayOpt[] = [];
-  const has = (k: string) => !pm || pm[k];
   if (!pm || pm.pix) opts.push({ method: 'pix', label: 'PIX', hint: 'Aprovação na hora', icon: (c) => <QrCode size={22} color={c} /> });
   if (!pm || pm.creditCardOnline) opts.push({ method: 'card_online', label: 'Cartão de crédito (online)', hint: 'Pague agora pelo app', icon: (c) => <CreditCard size={22} color={c} /> });
+  // Carteiras BR habilitadas no servidor de pagamentos (GET /config).
+  if (wallets?.picpay) opts.push({ method: 'picpay', label: 'PicPay', hint: 'Pague pelo app do PicPay', icon: (c) => <Wallet size={22} color={c} /> });
+  if (wallets?.nupay) opts.push({ method: 'nupay', label: 'NuPay (Nubank)', hint: 'Pague pelo app do Nubank', icon: (c) => <Wallet size={22} color={c} /> });
   if (!pm || pm.creditCardDelivery || pm.debitCardDelivery)
     opts.push({ method: 'card_delivery', label: 'Cartão na entrega', hint: 'Crédito ou débito na maquininha', icon: (c) => <CreditCard size={22} color={c} /> });
   opts.push({ method: 'cash_delivery', label: 'Dinheiro na entrega', hint: 'Informe o troco', icon: (c) => <Banknote size={22} color={c} /> });
