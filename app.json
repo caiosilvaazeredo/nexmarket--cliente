@@ -84,7 +84,8 @@
           "merchantIdentifier": "merchant.com.nexmarket.cliente",
           "enableGooglePay": true
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": false
