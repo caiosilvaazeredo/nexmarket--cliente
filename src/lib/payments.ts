@@ -4,6 +4,8 @@ import type { PaymentMethod } from './types';
 export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   pix: 'PIX',
   card_online: 'Cartão de crédito (online)',
+  picpay: 'PicPay',
+  nupay: 'NuPay (Nubank)',
   card_delivery: 'Cartão na entrega',
   cash_delivery: 'Dinheiro na entrega',
   voucher_delivery: 'Vale-refeição na entrega',
@@ -12,6 +14,8 @@ export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
 export const PAYMENT_SHORT: Record<PaymentMethod, string> = {
   pix: 'PIX',
   card_online: 'Cartão online',
+  picpay: 'PicPay',
+  nupay: 'NuPay',
   card_delivery: 'Cartão na entrega',
   cash_delivery: 'Dinheiro',
   voucher_delivery: 'Vale',
@@ -168,6 +172,76 @@ export function getPaymentStatus(input: {
   if (input.sessionId) query.sessionId = input.sessionId;
   if (input.paymentIntentId) query.paymentIntentId = input.paymentIntentId;
   return api<PaymentStatus>('/api/payments/status', { query });
+}
+
+/* ------------------------ Config pública do gateway ----------------------- */
+
+export interface GatewayPublicConfig {
+  publishableKey?: string;
+  currency?: string;
+  /** Carteiras extras habilitadas no servidor (PicPay/NuPay). */
+  wallets?: { picpay?: boolean; nupay?: boolean };
+}
+
+let gwConfig: GatewayPublicConfig | null = null;
+let gwConfigAt = 0;
+
+/** GET /config (público, cache 5 min) — decide quais opções o checkout mostra. */
+export async function getGatewayConfig(): Promise<GatewayPublicConfig> {
+  const base = paymentsApiUrl();
+  if (!base) return {};
+  if (gwConfig && Date.now() - gwConfigAt < 5 * 60 * 1000) return gwConfig;
+  try {
+    const res = await fetch(`${base}/config`);
+    gwConfig = res.ok ? await res.json() : {};
+  } catch {
+    gwConfig = {};
+  }
+  gwConfigAt = Date.now();
+  return gwConfig || {};
+}
+
+/* -------------------- Carteiras BR: PicPay e NuPay ------------------------- */
+
+export type WalletProvider = 'picpay' | 'nupay';
+
+export interface WalletCharge {
+  provider: WalletProvider;
+  paymentUrl: string | null;
+  qrContent: string | null;
+  qrBase64: string | null;
+  expiresAt: string | null;
+}
+
+/** Cria a cobrança na carteira (PicPay exige CPF do comprador). */
+export async function createWalletPayment(
+  provider: WalletProvider,
+  input: {
+    smId: string;
+    orderId: string;
+    amount: number;
+    buyer?: { firstName?: string; lastName?: string; document?: string; email?: string; phone?: string };
+  },
+): Promise<WalletCharge> {
+  try {
+    return await api<WalletCharge>(`/api/payments/wallet/${provider}`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  } catch (e: any) {
+    e.cpfRequired = e?.status === 400 && /CPF/i.test(e?.message || '');
+    e.walletUnavailable = e?.status === 501;
+    throw e;
+  }
+}
+
+export function getWalletStatus(
+  provider: WalletProvider,
+  input: { smId: string; orderId: string },
+): Promise<{ status: string; paid: boolean }> {
+  return api(`/api/payments/wallet/${provider}/status`, {
+    query: { smId: input.smId, orderId: input.orderId },
+  });
 }
 
 /* ------------------- Apple Pay / Google Pay (in-app) ------------------- */

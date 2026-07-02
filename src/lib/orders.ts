@@ -303,12 +303,12 @@ export async function cancelOrder(order: Order): Promise<void> {
  */
 export async function markPaid(
   order: Order,
-  info?: { paymentIntentId?: string; checkoutSessionId?: string },
+  info?: { paymentIntentId?: string; checkoutSessionId?: string; provider?: string },
 ): Promise<void> {
   await updateDoc(doc(db, `supermarkets/${order.supermarketId}/orders/${order.id}`), {
     paymentStatus: 'paid',
     payment: {
-      provider: info?.paymentIntentId || info?.checkoutSessionId ? 'stripe' : 'demo',
+      provider: info?.provider || (info?.paymentIntentId || info?.checkoutSessionId ? 'stripe' : 'demo'),
       status: 'paid',
       ...(info?.paymentIntentId ? { paymentIntentId: info.paymentIntentId } : {}),
       ...(info?.checkoutSessionId ? { checkoutSessionId: info.checkoutSessionId } : {}),

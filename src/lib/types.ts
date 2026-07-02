@@ -236,6 +236,8 @@ export type FulfillmentType = 'delivery' | 'pickup';
 export type PaymentMethod =
   | 'pix'
   | 'card_online'
+  | 'picpay'
+  | 'nupay'
   | 'card_delivery'
   | 'cash_delivery'
   | 'voucher_delivery';

@@ -14,6 +14,7 @@ import {
   Ticket,
   Check,
   Plus,
+  Wallet,
 } from 'lucide-react-native';
 
 import { Button } from '../src/components/ui/Button';
@@ -28,8 +29,12 @@ import { lineTotal, effectiveUnitPrice, applyCoupon } from '../src/lib/promotion
 import { computeDeliveryFee, meetsMinimum, surgeActive } from '../src/lib/storeHours';
 import { placeOrder, markPaid } from '../src/lib/orders';
 import { spendWallet } from '../src/lib/wallet';
+import { getGatewayConfig, type GatewayPublicConfig } from '../src/lib/payments';
 import { successHaptic, getExpoPushToken } from '../src/lib/notifications';
 import type { PaymentMethod, FulfillmentType, Order } from '../src/lib/types';
+
+/** Métodos cobrados online (abrem a folha de pagamento após criar o pedido). */
+const ONLINE_METHODS: PaymentMethod[] = ['pix', 'card_online', 'picpay', 'nupay'];
 
 export default function Checkout() {
   const { colors } = useColors();
@@ -89,7 +94,16 @@ export default function Checkout() {
 
   const address = customer?.addresses?.find((a) => a.id === addressId) || null;
 
-  const paymentOptions = useMemo(() => buildPaymentOptions(storeInfo?.paymentMethods), [storeInfo]);
+  // Carteiras extras (PicPay/NuPay) aparecem apenas quando o servidor habilita.
+  const [gwConfig, setGwConfig] = useState<GatewayPublicConfig>({});
+  useEffect(() => {
+    getGatewayConfig().then(setGwConfig).catch(() => {});
+  }, []);
+
+  const paymentOptions = useMemo(
+    () => buildPaymentOptions(storeInfo?.paymentMethods, gwConfig.wallets),
+    [storeInfo, gwConfig],
+  );
 
   useEffect(() => {
     if (!payment && paymentOptions.length) setPayment(paymentOptions[0].method);
@@ -170,9 +184,9 @@ export default function Checkout() {
         spendWallet(authUser.uid, walletUsed).catch(() => {});
       }
 
-      if ((payment === 'pix' || payment === 'card_online') && total > 0) {
+      if (ONLINE_METHODS.includes(payment) && total > 0) {
         setPayModal({ orderId });
-      } else if ((payment === 'pix' || payment === 'card_online') && total === 0) {
+      } else if (ONLINE_METHODS.includes(payment) && total === 0) {
         // Carteira cobriu tudo — nada a cobrar online.
         await markPaid({ supermarketId: currentSmId!, id: orderId } as Order).catch(() => {});
         clear();
@@ -386,11 +400,13 @@ interface PayOpt {
   icon: (color: string) => React.ReactNode;
 }
 
-function buildPaymentOptions(pm?: any): PayOpt[] {
+function buildPaymentOptions(pm?: any, wallets?: { picpay?: boolean; nupay?: boolean }): PayOpt[] {
   const opts: PayOpt[] = [];
-  const has = (k: string) => !pm || pm[k];
   if (!pm || pm.pix) opts.push({ method: 'pix', label: 'PIX', hint: 'Aprovação na hora', icon: (c) => <QrCode size={22} color={c} /> });
   if (!pm || pm.creditCardOnline) opts.push({ method: 'card_online', label: 'Cartão de crédito (online)', hint: 'Pague agora pelo app', icon: (c) => <CreditCard size={22} color={c} /> });
+  // Carteiras BR habilitadas no servidor de pagamentos (GET /config).
+  if (wallets?.picpay) opts.push({ method: 'picpay', label: 'PicPay', hint: 'Pague pelo app do PicPay', icon: (c) => <Wallet size={22} color={c} /> });
+  if (wallets?.nupay) opts.push({ method: 'nupay', label: 'NuPay (Nubank)', hint: 'Pague pelo app do Nubank', icon: (c) => <Wallet size={22} color={c} /> });
   if (!pm || pm.creditCardDelivery || pm.debitCardDelivery)
     opts.push({ method: 'card_delivery', label: 'Cartão na entrega', hint: 'Crédito ou débito na maquininha', icon: (c) => <CreditCard size={22} color={c} /> });
   opts.push({ method: 'cash_delivery', label: 'Dinheiro na entrega', hint: 'Informe o troco', icon: (c) => <Banknote size={22} color={c} /> });

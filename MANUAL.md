@@ -88,6 +88,8 @@ Antes de publicar em produção:
 | Cartão online | abre o **Stripe Checkout** no navegador (página segura da Stripe) → ao voltar, o app confirma o status |
 | **Cartão salvo (1 toque)** | marque "Salvar cartão" no primeiro pagamento; depois pague direto no app sem redigitar (fallback 3DS → Checkout) |
 | **Apple Pay / Google Pay** | botão nativo dentro do app (dev build) e automático na página do Stripe Checkout |
+| **PicPay** | QR + abrir no app do PicPay, confirmação automática (aparece quando a plataforma configura o token) |
+| **NuPay (Nubank)** | pagar pelo app do Nubank (aparece quando a plataforma conclui o credenciamento) |
 | **Saldo da carteira** | cashback acumulado vira desconto no checkout (pode cobrir o pedido inteiro) |
 | Cartão/dinheiro/vale na entrega | sem cobrança online; a loja recebe na entrega |
 

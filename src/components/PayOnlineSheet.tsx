@@ -18,19 +18,26 @@ import {
   getPaymentStatus,
   getSavedMethods,
   chargeSaved,
+  createWalletPayment,
+  getWalletStatus,
   tokenizeCard,
   maskCardNumber,
   maskExpiry,
+  PAYMENT_LABELS,
   type PixPayment,
   type SavedCard,
+  type WalletCharge,
+  type WalletProvider,
 } from '../lib/payments';
 import { isNativeWalletAvailable, payWithNativeWallet, nativeWalletLabel } from '../lib/nativePay';
+import { useAppStore } from '../store/useAppStore';
 import { warnHaptic, successHaptic } from '../lib/notifications';
 import type { PaymentMethod } from '../lib/types';
 
 export interface PaidInfo {
   paymentIntentId?: string;
   checkoutSessionId?: string;
+  provider?: string;
 }
 
 interface Props {
@@ -54,8 +61,11 @@ interface Props {
  */
 export function PayOnlineSheet({ visible, method, smId, orderId, total, storeName, onDone }: Props) {
   const { colors } = useColors();
+  const customer = useAppStore((s) => s.customer);
   const stripeMode = paymentsConfigured();
   const isPix = method === 'pix';
+  const isWallet = method === 'picpay' || method === 'nupay';
+  const walletProvider = (isWallet ? method : 'picpay') as WalletProvider;
 
   const [busy, setBusy] = useState(false);
   const [pix, setPix] = useState<PixPayment | null>(null);
@@ -66,6 +76,11 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
   const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
   const [saveCard, setSaveCard] = useState(true);
   const [walletReady, setWalletReady] = useState(false);
+  // Carteiras BR (PicPay/NuPay)
+  const [walletCharge, setWalletCharge] = useState<WalletCharge | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const [cpf, setCpf] = useState('');
+  const [needsCpf, setNeedsCpf] = useState(false);
   const doneRef = useRef(false);
 
   const finish = (paid: boolean, info?: PaidInfo) => {
@@ -83,6 +98,10 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
       setPixError(null);
       setSessionId(null);
       setAwaitingCard(false);
+      setWalletCharge(null);
+      setWalletError(null);
+      setNeedsCpf(false);
+      setCpf(customer?.cpf || '');
     }
   }, [visible, orderId]);
 
@@ -98,20 +117,20 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
 
   // Cartões salvos (pagamento em 1 toque).
   useEffect(() => {
-    if (!visible || !stripeMode || isPix) return;
+    if (!visible || !stripeMode || isPix || isWallet) return;
     getSavedMethods()
       .then(setSavedCards)
       .catch(() => setSavedCards([]));
-  }, [visible, stripeMode, isPix]);
+  }, [visible, stripeMode, isPix, isWallet]);
 
   // Apple Pay / Google Pay nativo (dev build; no Expo Go fica indisponível
   // e as carteiras seguem aparecendo na página do Stripe Checkout).
   useEffect(() => {
-    if (!visible || !stripeMode || isPix) return;
+    if (!visible || !stripeMode || isPix || isWallet) return;
     isNativeWalletAvailable()
       .then(setWalletReady)
       .catch(() => setWalletReady(false));
-  }, [visible, stripeMode, isPix]);
+  }, [visible, stripeMode, isPix, isWallet]);
 
   // PIX (Stripe): cria a cobrança ao abrir.
   useEffect(() => {
@@ -135,6 +154,58 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
       cancelled = true;
     };
   }, [visible, stripeMode, isPix, smId, orderId]);
+
+  // Carteiras BR (PicPay/NuPay): cria a cobrança ao abrir.
+  const createWalletCharge = async (document?: string) => {
+    setWalletError(null);
+    try {
+      const nome = (customer?.name || '').trim().split(/\s+/);
+      const charge = await createWalletPayment(walletProvider, {
+        smId,
+        orderId,
+        amount: total,
+        buyer: {
+          firstName: nome[0] || 'Cliente',
+          lastName: nome.slice(1).join(' ') || 'Nexmarket',
+          document: document || cpf || customer?.cpf || undefined,
+          email: customer?.email,
+          phone: customer?.phone,
+        },
+      });
+      setNeedsCpf(false);
+      setWalletCharge(charge);
+    } catch (e: any) {
+      if (e?.cpfRequired) {
+        setNeedsCpf(true);
+      } else {
+        setWalletError(
+          e?.walletUnavailable
+            ? `${PAYMENT_LABELS[method!]} ainda não está habilitado na plataforma. Escolha outra forma de pagamento.`
+            : e?.message || 'Não foi possível gerar a cobrança.',
+        );
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!visible || !isWallet || walletCharge || walletError || needsCpf) return;
+    createWalletCharge();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, isWallet, orderId]);
+
+  // Verificação automática da carteira a cada 4s.
+  useEffect(() => {
+    if (!visible || !isWallet || !walletCharge) return;
+    const t = setInterval(async () => {
+      try {
+        const s = await getWalletStatus(walletProvider, { smId, orderId });
+        if (s.paid) finish(true, { provider: walletProvider });
+      } catch {
+        // tenta de novo no próximo tick
+      }
+    }, 4000);
+    return () => clearInterval(t);
+  }, [visible, isWallet, walletCharge, smId, orderId]);
 
   // Verificação automática do PIX a cada 4s.
   useEffect(() => {
@@ -252,11 +323,96 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
       <View style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}>
         <View style={{ backgroundColor: colors.card, borderTopLeftRadius: radius['2xl'], borderTopRightRadius: radius['2xl'], padding: spacing.lg, gap: spacing.md }}>
           <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>
-            {isPix ? 'Pague com PIX' : 'Pagamento com cartão'}
+            {isWallet ? `Pague com ${PAYMENT_LABELS[method!]}` : isPix ? 'Pague com PIX' : 'Pagamento com cartão'}
           </Text>
 
-          {/* ---------------------------- PIX ---------------------------- */}
-          {isPix ? (
+          {/* --------------------- Carteiras BR (PicPay/NuPay) --------------------- */}
+          {isWallet ? (
+            needsCpf ? (
+              <>
+                <Text style={{ color: colors.textMuted }}>
+                  O {PAYMENT_LABELS[method!]} exige o CPF do comprador para gerar a cobrança.
+                </Text>
+                <Input
+                  label="CPF"
+                  placeholder="000.000.000-00"
+                  keyboardType="number-pad"
+                  value={cpf}
+                  onChangeText={(t) => setCpf(t.replace(/[^\d.-]/g, '').slice(0, 14))}
+                />
+                <Button
+                  label="Gerar cobrança"
+                  size="lg"
+                  onPress={() => {
+                    const digits = cpf.replace(/\D/g, '');
+                    if (digits.length !== 11) {
+                      Alert.alert('CPF', 'Informe um CPF válido (11 dígitos).');
+                      return;
+                    }
+                    createWalletCharge(digits);
+                  }}
+                />
+              </>
+            ) : walletError ? (
+              <Text style={{ color: colors.danger, fontWeight: font.bold }}>{walletError}</Text>
+            ) : !walletCharge ? (
+              <View style={{ alignItems: 'center', paddingVertical: spacing.xl, gap: 10 }}>
+                <ActivityIndicator color={colors.primary} />
+                <Text style={{ color: colors.textMuted }}>Gerando cobrança…</Text>
+              </View>
+            ) : (
+              <>
+                <Text style={{ color: colors.textMuted }}>
+                  Conclua o pagamento no app do {PAYMENT_LABELS[method!]}. A confirmação aqui é automática.
+                </Text>
+                {walletCharge.qrBase64 ? (
+                  <View style={{ alignSelf: 'center', width: 190, height: 190, borderRadius: radius.lg, backgroundColor: '#fff', borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                    <Image
+                      source={{ uri: walletCharge.qrBase64.startsWith('data:') ? walletCharge.qrBase64 : `data:image/png;base64,${walletCharge.qrBase64}` }}
+                      style={{ width: 182, height: 182 }}
+                      resizeMode="contain"
+                    />
+                  </View>
+                ) : null}
+                {walletCharge.qrContent ? (
+                  <Pressable
+                    onPress={async () => {
+                      await Clipboard.setStringAsync(walletCharge.qrContent!);
+                      Alert.alert('Copiado!', 'Código copiado. Cole no app da carteira.');
+                    }}
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: radius.md, borderWidth: 2, borderColor: colors.border, padding: spacing.md }}
+                  >
+                    <Copy size={18} color={colors.primary} />
+                    <Text style={{ color: colors.primary, fontWeight: font.bold }}>Copiar código</Text>
+                  </Pressable>
+                ) : null}
+                {walletCharge.paymentUrl ? (
+                  <Button
+                    label={`Abrir no ${PAYMENT_LABELS[method!]}`}
+                    size="lg"
+                    loading={busy}
+                    onPress={async () => {
+                      setBusy(true);
+                      try {
+                        await WebBrowser.openAuthSessionAsync(walletCharge.paymentUrl!, redirect);
+                        const s = await getWalletStatus(walletProvider, { smId, orderId });
+                        if (s.paid) finish(true, { provider: walletProvider });
+                      } catch {
+                        // o polling continua verificando
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  />
+                ) : null}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs }}>Aguardando pagamento…</Text>
+                </View>
+              </>
+            )
+          ) : /* ---------------------------- PIX ---------------------------- */
+          isPix ? (
             stripeMode ? (
               pixError ? (
                 <>
@@ -395,7 +551,7 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
 
           <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg, textAlign: 'center' }}>{brl(total)}</Text>
 
-          {stripeMode ? (
+          {isWallet ? null : stripeMode ? (
             !isPix && !awaitingCard ? (
               <Button
                 label={savedCards.length > 0 ? 'Pagar com outro cartão' : 'Pagar com cartão (Stripe)'}

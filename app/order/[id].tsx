@@ -97,11 +97,13 @@ export default function OrderScreen() {
   const cancelled = order.status === 'cancelled';
   const isDelivery = order.fulfillment !== 'pickup';
   const canCancel = order.status === 'pending' && !cancelled && !finished;
+  const onlineMethod =
+    order.paymentMethod === 'pix' ||
+    order.paymentMethod === 'card_online' ||
+    order.paymentMethod === 'picpay' ||
+    order.paymentMethod === 'nupay';
   const paymentPending =
-    (order.paymentMethod === 'pix' || order.paymentMethod === 'card_online') &&
-    order.paymentStatus !== 'paid' &&
-    order.paymentStatus !== 'refunded' &&
-    !cancelled;
+    onlineMethod && order.paymentStatus !== 'paid' && order.paymentStatus !== 'refunded' && !cancelled;
 
   // Live map: driver -> customer
   const driverLoc = order.driverLocation || driver?.location;
@@ -352,7 +354,7 @@ export default function OrderScreen() {
       {/* Pagamento online (PIX / cartão via Stripe) */}
       <PayOnlineSheet
         visible={showPix}
-        method={order.paymentMethod === 'pix' || order.paymentMethod === 'card_online' ? order.paymentMethod : null}
+        method={onlineMethod ? order.paymentMethod! : null}
         smId={order.supermarketId}
         orderId={order.id}
         total={order.total}
