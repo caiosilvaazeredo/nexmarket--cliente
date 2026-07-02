@@ -13,7 +13,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#58CC02"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.nexmarket.cliente",
@@ -74,6 +76,13 @@
           "backgroundColor": "#58CC02",
           "image": "./assets/splash.png",
           "imageWidth": 200
+        }
+      ],
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.com.nexmarket.cliente",
+          "enableGooglePay": true
         }
       ]
     ],

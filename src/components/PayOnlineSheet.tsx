@@ -24,6 +24,7 @@ import {
   type PixPayment,
   type SavedCard,
 } from '../lib/payments';
+import { isNativeWalletAvailable, payWithNativeWallet, nativeWalletLabel } from '../lib/nativePay';
 import { warnHaptic, successHaptic } from '../lib/notifications';
 import type { PaymentMethod } from '../lib/types';
 
@@ -64,6 +65,7 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
   const [card, setCard] = useState({ number: '', expiry: '', cvv: '' });
   const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
   const [saveCard, setSaveCard] = useState(true);
+  const [walletReady, setWalletReady] = useState(false);
   const doneRef = useRef(false);
 
   const finish = (paid: boolean, info?: PaidInfo) => {
@@ -100,6 +102,15 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
     getSavedMethods()
       .then(setSavedCards)
       .catch(() => setSavedCards([]));
+  }, [visible, stripeMode, isPix]);
+
+  // Apple Pay / Google Pay nativo (dev build; no Expo Go fica indisponível
+  // e as carteiras seguem aparecendo na página do Stripe Checkout).
+  useEffect(() => {
+    if (!visible || !stripeMode || isPix) return;
+    isNativeWalletAvailable()
+      .then(setWalletReady)
+      .catch(() => setWalletReady(false));
   }, [visible, stripeMode, isPix]);
 
   // PIX (Stripe): cria a cobrança ao abrir.
@@ -153,6 +164,22 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
     } catch (e: any) {
       warnHaptic();
       Alert.alert('Pagamento', e?.message || 'Não foi possível iniciar o pagamento.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Apple Pay / Google Pay nativo (folha da carteira do sistema). */
+  const payWithWallet = async () => {
+    setBusy(true);
+    try {
+      const { paymentIntentId } = await payWithNativeWallet({ smId, orderId, amount: total, storeName });
+      finish(true, { paymentIntentId });
+    } catch (e: any) {
+      if (!e?.canceled) {
+        warnHaptic();
+        Alert.alert(nativeWalletLabel(), e?.message || 'Pagamento não concluído.');
+      }
     } finally {
       setBusy(false);
     }
@@ -291,6 +318,20 @@ export function PayOnlineSheet({ visible, method, smId, orderId, total, storeNam
           ) : /* --------------------------- Cartão --------------------------- */
           stripeMode ? (
             <>
+              {/* Apple Pay / Google Pay (botão nativo — dev build) */}
+              {walletReady && !awaitingCard ? (
+                <Pressable
+                  disabled={busy}
+                  onPress={payWithWallet}
+                  style={{ height: 52, borderRadius: radius.md, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 }}
+                >
+                  {busy ? <ActivityIndicator size="small" color="#fff" /> : null}
+                  <Text style={{ color: '#fff', fontWeight: font.black, fontSize: fontSize.base }}>
+                    Pagar com {nativeWalletLabel()}
+                  </Text>
+                </Pressable>
+              ) : null}
+
               {/* Cartões salvos → pagamento em 1 toque */}
               {savedCards.length > 0 && !awaitingCard ? (
                 <View style={{ gap: spacing.sm }}>

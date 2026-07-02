@@ -170,6 +170,28 @@ export function getPaymentStatus(input: {
   return api<PaymentStatus>('/api/payments/status', { query });
 }
 
+/* ------------------- Apple Pay / Google Pay (in-app) ------------------- */
+
+export interface NativePayIntent {
+  clientSecret: string;
+  paymentIntentId: string;
+  publishableKey: string;
+  amount: number;
+  testEnv: boolean;
+}
+
+/** PaymentIntent para confirmar com a carteira nativa (PlatformPay). */
+export function createPaymentIntent(input: {
+  smId: string;
+  orderId: string;
+  amount: number;
+}): Promise<NativePayIntent> {
+  return api<NativePayIntent>('/api/payments/payment-intent', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
 /* ------------------------ Cartões salvos (1 toque) ------------------------ */
 
 export interface SavedCard {

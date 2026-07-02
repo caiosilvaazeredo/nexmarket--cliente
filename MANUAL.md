@@ -87,6 +87,7 @@ Antes de publicar em produção:
 | PIX | o servidor cria a cobrança na Stripe → app mostra **QR code real + copia-e-cola** → confirmação automática (polling + webhook) |
 | Cartão online | abre o **Stripe Checkout** no navegador (página segura da Stripe) → ao voltar, o app confirma o status |
 | **Cartão salvo (1 toque)** | marque "Salvar cartão" no primeiro pagamento; depois pague direto no app sem redigitar (fallback 3DS → Checkout) |
+| **Apple Pay / Google Pay** | botão nativo dentro do app (dev build) e automático na página do Stripe Checkout |
 | **Saldo da carteira** | cashback acumulado vira desconto no checkout (pode cobrir o pedido inteiro) |
 | Cartão/dinheiro/vale na entrega | sem cobrança online; a loja recebe na entrega |
 
@@ -108,6 +109,33 @@ Antes de publicar em produção:
 - **Cashback**: % definido pela plataforma cai na carteira a cada entrega.
 - **Push transacional**: requer projectId EAS (`eas build:configure`); sem ele
   o app usa apenas notificações locais.
+
+## 🍎🤖 Apple Pay e Google Pay
+
+Dois caminhos, ambos já integrados:
+
+1. **Página do Stripe Checkout (funciona hoje, inclusive no Expo Go):** as
+   carteiras já estão ativas na configuração da conta Stripe e aparecem
+   automaticamente na página segura quando o aparelho suporta (Safari/iPhone →
+   Apple Pay; Chrome/Android com GPay → Google Pay).
+2. **Botão nativo dentro do app** (`@stripe/stripe-react-native`, já instalado
+   e configurado no `app.json`):
+   - Requer **dev build** — o módulo é nativo e não existe no Expo Go
+     (o app detecta e simplesmente esconde o botão):
+     ```bash
+     npx expo prebuild            # ou: eas build --profile development
+     npx expo run:android         # / run:ios
+     ```
+   - **Google Pay**: funciona em teste com `testEnv` (cartão de teste na conta
+     Google do aparelho). Em produção, ative o Google Pay no dashboard Stripe.
+   - **Apple Pay**: crie o Merchant ID `merchant.com.nexmarket.cliente` no
+     Apple Developer, habilite a capability *Apple Pay* no app e registre o
+     merchant no dashboard Stripe (Settings → Payment methods → Apple Pay).
+     Depois só rebuildar.
+   - O botão "Pagar com Apple Pay/Google Pay" aparece na folha de pagamento do
+     cartão quando o aparelho suporta; a cobrança usa um PaymentIntent criado
+     pelo servidor (`/api/payments/payment-intent`) e confirmado pela folha
+     nativa da carteira — nenhum dado de cartão passa pelo app.
 
 ## 🆘 Problemas comuns
 
