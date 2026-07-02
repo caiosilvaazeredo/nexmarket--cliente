@@ -1,0 +1,47 @@
+# Gera o APK Android do app dentro do próprio repositório (GitHub Actions).
+# Rode manualmente em Actions → "Build APK (Android)" → Run workflow, ou
+# automaticamente a cada push nas branches abaixo. O APK sai como artifact
+# do run (Actions → run → Artifacts), assinado com a keystore de debug —
+# instalável para testes; para a Play Store use EAS Build (ver MANUAL.md).
+name: Build APK (Android)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, claude/stripe-payment-setup-4fd1sk]
+    paths-ignore: ['**.md']
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Gerar projeto Android (Expo prebuild)
+        run: npx expo prebuild --platform android --no-install
+        env:
+          EXPO_NO_TELEMETRY: '1'
+
+      - name: Build APK (release, keystore de debug)
+        run: cd android && ./gradlew assembleRelease --no-daemon
+
+      - name: Publicar APK como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexmarket-cliente-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
