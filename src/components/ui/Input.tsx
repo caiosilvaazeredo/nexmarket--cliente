@@ -13,10 +13,12 @@ import { radius, font, fontSize } from '../../lib/theme';
 interface InputProps extends TextInputProps {
   label?: string;
   icon?: React.ReactNode;
+  right?: React.ReactNode;
   containerStyle?: ViewStyle;
+  error?: string;
 }
 
-export function Input({ label, icon, containerStyle, style, ...rest }: InputProps) {
+export function Input({ label, icon, right, containerStyle, style, error, ...rest }: InputProps) {
   const { colors } = useColors();
   const [focused, setFocused] = useState(false);
 
@@ -41,7 +43,7 @@ export function Input({ label, icon, containerStyle, style, ...rest }: InputProp
           styles.wrap,
           {
             backgroundColor: focused ? colors.card : colors.cardMuted,
-            borderColor: focused ? colors.primary : colors.border,
+            borderColor: error ? colors.danger : focused ? colors.primary : colors.border,
           },
         ]}
       >
@@ -62,7 +64,13 @@ export function Input({ label, icon, containerStyle, style, ...rest }: InputProp
           ]}
           {...rest}
         />
+        {right ? <View style={{ marginLeft: 8 }}>{right}</View> : null}
       </View>
+      {error ? (
+        <Text style={{ color: colors.danger, fontWeight: font.semibold, fontSize: fontSize.xs, marginTop: 4 }}>
+          {error}
+        </Text>
+      ) : null}
     </View>
   );
 }

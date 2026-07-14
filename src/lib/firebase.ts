@@ -8,9 +8,10 @@ import {
   signInAnonymously,
   signOut,
   updateProfile,
+  GoogleAuthProvider,
+  OAuthProvider,
+  signInWithCredential,
   deleteUser,
-  EmailAuthProvider,
-  linkWithCredential,
 } from 'firebase/auth';
 
 // getReactNativePersistence is exported only from Firebase's React Native
@@ -19,13 +20,13 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { getReactNativePersistence } = require('firebase/auth') as any;
 import { getFirestore } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import firebaseConfig from '../../firebase-config.json';
 
 // Reuse the SAME Firebase project + named Firestore database as the loja and
-// entregador apps, so all three apps share one integrated backend (RNF08).
+// entregador apps, so the three apps share one integrated backend (RNF08).
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
 // React Native needs explicit AsyncStorage-backed auth persistence,
@@ -36,6 +37,7 @@ export const auth = (() => {
       persistence: getReactNativePersistence(AsyncStorage),
     });
   } catch {
+    // initializeAuth throws if already initialized (Fast Refresh) -> fall back.
     return getAuth(app);
   }
 })();
@@ -45,34 +47,19 @@ export const storage = getStorage(app, `gs://${firebaseConfig.storageBucket}`);
 
 export { app };
 
-/* -------------------------- Email/password auth -------------------------- */
+/* -------------------------- Auth helpers -------------------------- */
 
 export const loginWithEmail = async (email: string, pass: string) =>
   (await signInWithEmailAndPassword(auth, email.trim(), pass)).user;
 
 export const registerWithEmail = async (email: string, pass: string, name?: string) => {
-  // If the visitor is browsing as a guest (anonymous), UPGRADE that account in
-  // place via linkWithCredential so their cart, addresses and any orders made
-  // as a guest stay attached to the new permanent account (same uid).
-  const current = auth.currentUser;
-  let user;
-  if (current?.isAnonymous) {
-    try {
-      const credential = EmailAuthProvider.credential(email.trim(), pass);
-      user = (await linkWithCredential(current, credential)).user;
-    } catch (e: any) {
-      // e.g. email already in use -> fall back to a fresh account.
-      user = (await createUserWithEmailAndPassword(auth, email.trim(), pass)).user;
-    }
-  } else {
-    user = (await createUserWithEmailAndPassword(auth, email.trim(), pass)).user;
-  }
+  const cred = await createUserWithEmailAndPassword(auth, email.trim(), pass);
   if (name) {
     try {
-      await updateProfile(user, { displayName: name });
+      await updateProfile(cred.user, { displayName: name });
     } catch {}
   }
-  return user;
+  return cred.user;
 };
 
 export const resetPassword = async (email: string) =>
@@ -83,6 +70,22 @@ export const loginAsVisitor = async () => {
   return (await signInAnonymously(auth)).user;
 };
 
+/** Sign in with a Google id token obtained via expo-auth-session. */
+export const loginWithGoogleIdToken = async (idToken: string, accessToken?: string) => {
+  const credential = GoogleAuthProvider.credential(idToken, accessToken);
+  return (await signInWithCredential(auth, credential)).user;
+};
+
+/** Sign in with an Apple identity token. */
+export const loginWithAppleCredential = async (
+  identityToken: string,
+  rawNonce?: string,
+) => {
+  const provider = new OAuthProvider('apple.com');
+  const credential = provider.credential({ idToken: identityToken, rawNonce });
+  return (await signInWithCredential(auth, credential)).user;
+};
+
 export const logout = async () => {
   try {
     await signOut(auth);
@@ -91,11 +94,33 @@ export const logout = async () => {
   }
 };
 
-/** LGPD (RNF12): permanently delete the auth account. The Firestore profile +
- *  personal data are erased separately in customers.ts before this call. */
-export const deleteAccount = async () => {
+/** Permanently delete the current Firebase Auth user (LGPD — RNF12). */
+export const deleteCurrentAuthUser = async () => {
   if (auth.currentUser) await deleteUser(auth.currentUser);
 };
+
+/* -------------------------- Storage helpers -------------------------- */
+
+/**
+ * Uploads a local file (file://...) to Firebase Storage and returns its
+ * public download URL.
+ */
+export async function uploadImageAsync(localUri: string, path: string): Promise<string> {
+  const blob: Blob = await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.onload = () => resolve(xhr.response);
+    xhr.onerror = () => reject(new Error('Falha ao ler o arquivo de imagem.'));
+    xhr.responseType = 'blob';
+    xhr.open('GET', localUri, true);
+    xhr.send(null);
+  });
+
+  const storageRef = ref(storage, path);
+  await uploadBytes(storageRef, blob);
+  // @ts-ignore RN Blob has close() to free memory
+  if (typeof (blob as any).close === 'function') (blob as any).close();
+  return getDownloadURL(storageRef);
+}
 
 /* -------------------------- Error handling -------------------------- */
 
@@ -113,15 +138,13 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null,
 ) {
-  console.error(
-    'Firestore Error:',
-    JSON.stringify({
-      error: error instanceof Error ? error.message : String(error),
-      operationType,
-      path,
-      uid: auth.currentUser?.uid ?? null,
-    }),
-  );
+  const info = {
+    error: error instanceof Error ? error.message : String(error),
+    operationType,
+    path,
+    uid: auth.currentUser?.uid ?? null,
+  };
+  console.error('Firestore Error:', JSON.stringify(info));
 }
 
 /** Map Firebase auth error codes to friendly Portuguese messages. */
@@ -135,19 +158,21 @@ export function authErrorMessage(err: any): string {
     case 'auth/invalid-credential':
       return 'Credenciais inválidas. Verifique e-mail e senha.';
     case 'auth/email-already-in-use':
-      return 'Este e-mail já está em uso.';
+      return 'Este e-mail já está em uso. Tente fazer login.';
     case 'auth/weak-password':
       return 'A senha deve ter ao menos 6 caracteres.';
     case 'auth/too-many-requests':
       return 'Muitas tentativas. Tente novamente em instantes.';
     case 'auth/network-request-failed':
       return 'Sem conexão. Verifique sua internet.';
-    case 'auth/invalid-verification-code':
-      return 'Código SMS inválido. Confira os números.';
-    case 'auth/code-expired':
-      return 'O código expirou. Solicite um novo.';
+    case 'auth/requires-recent-login':
+      return 'Por segurança, faça login novamente para concluir esta ação.';
     case 'auth/admin-restricted-operation':
-      return 'Modo de teste desativado no Firebase (ative o login anônimo).';
+      return 'Modo visitante desativado no Firebase (ative o login anônimo).';
+    case 'auth/invalid-phone-number':
+      return 'Número de telefone inválido.';
+    case 'auth/invalid-verification-code':
+      return 'Código de verificação inválido.';
     default:
       return 'Ocorreu um erro. Tente novamente.';
   }

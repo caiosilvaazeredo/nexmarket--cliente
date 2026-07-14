@@ -1,234 +1,179 @@
 import {
-  doc,
-  getDoc,
-  getDocs,
   collection,
-  query,
-  where,
-  limit,
+  doc,
   onSnapshot,
-  orderBy,
+  query,
+  getDocs,
+  getDoc,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import type {
   Supermarket,
-  DeliveryConfig,
-  Category,
+  Gondola,
   Product,
-  Branding,
+  Promotion,
+  DeliveryConfig,
+  StoreInfo,
+  AppConfig,
 } from './types';
-import { DEMO_STORE, DEMO_CATEGORIES, DEMO_PRODUCTS, DEMO_DELIVERY } from './demoData';
 
-/**
- * Catalog reads (RF05–RF09). The customer app only ever READS the catalog;
- * products/categories/branding are owned by the loja app and protected by
- * Security Rules (RNF11). Real-time listeners keep stock & prices fresh
- * almost instantly (RNF06).
- *
- * When the resolved store has no catalog yet (fresh project / test mode) we
- * fall back to a bundled demo catalog so the app is fully explorable without
- * touching the database — mirroring the entregador "Quero apenas testar" mode.
- */
+/* ----------------------------- Supermarkets ----------------------------- */
 
-let demoMode = false;
-export const isDemoMode = () => demoMode;
-
-/* ----------------------------- Supermarket ----------------------------- */
-
-/**
- * Resolve which store this app instance serves. Strategy:
- *  1) an explicit env/extra `supermarketId` (single-tenant white-label build), else
- *  2) the first `active` supermarket in the collection.
- * Returns the demo store if none is found.
- */
-export async function resolveSupermarket(preferredId?: string): Promise<Supermarket> {
-  try {
-    if (preferredId) {
-      const snap = await getDoc(doc(db, `supermarkets/${preferredId}`));
-      if (snap.exists()) return mapStore(preferredId, snap.data());
-    }
-    const q = query(collection(db, 'supermarkets'), where('active', '==', true), limit(1));
-    const res = await getDocs(q);
-    if (!res.empty) {
-      const d = res.docs[0];
-      return mapStore(d.id, d.data());
-    }
-    // Fallback: any supermarket at all.
-    const any = await getDocs(query(collection(db, 'supermarkets'), limit(1)));
-    if (!any.empty) {
-      const d = any.docs[0];
-      return mapStore(d.id, d.data());
-    }
-  } catch (e) {
-    console.warn('resolveSupermarket failed, using demo store', e);
-  }
-  demoMode = true;
-  return DEMO_STORE;
-}
-
-function mapStore(id: string, data: any): Supermarket {
-  const branding: Branding | undefined = data.branding || {
-    primaryColor: data.primaryColor,
-    appName: data.name,
-    logoUrl: data.logoUrl,
-  };
-  return {
-    id,
-    name: data.name || 'Loja',
-    logoUrl: data.logoUrl,
-    bannerUrl: data.bannerUrl,
-    description: data.description,
-    branding,
-    location: data.location || null,
-    address: data.address,
-    isOpen: data.isOpen ?? true,
-    minOrder: data.minOrder ?? 0,
-    rating: data.rating,
-    whatsapp: data.whatsapp,
-    active: data.active ?? true,
-  };
-}
-
-export function subscribeSupermarket(smId: string, cb: (s: Supermarket) => void) {
-  if (demoMode) {
-    cb(DEMO_STORE);
-    return () => {};
-  }
+export function subscribeSupermarkets(cb: (list: Supermarket[]) => void) {
   return onSnapshot(
-    doc(db, `supermarkets/${smId}`),
+    query(collection(db, 'supermarkets')),
     (snap) => {
-      if (snap.exists()) cb(mapStore(smId, snap.data()));
+      const list: Supermarket[] = [];
+      snap.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
+      list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      cb(list);
     },
-    (err) => console.warn('subscribeSupermarket error', err),
+    (err) => {
+      console.warn('subscribeSupermarkets error', err);
+      cb([]);
+    },
   );
 }
 
-export async function getDeliveryConfig(smId: string): Promise<DeliveryConfig> {
-  if (demoMode) return DEMO_DELIVERY;
+export async function getSupermarket(smId: string): Promise<Supermarket | null> {
   try {
-    const snap = await getDoc(doc(db, `supermarkets/${smId}/deliveryConfig/main`));
-    if (snap.exists()) {
-      const d = snap.data() as any;
-      return {
-        deliveryEnabled: d.deliveryEnabled ?? true,
-        pickupEnabled: d.pickupEnabled ?? true,
-        baseFee: d.baseFee ?? 5,
-        perKm: d.perKm ?? 1.5,
-        freeShippingMinimum: d.freeShippingMinimum,
-        maxRadiusKm: d.maxRadiusKm ?? 10,
-        estimatedMinutes: d.estimatedMinutes ?? 40,
-        scheduleEnabled: d.scheduleEnabled ?? false,
-        scheduleSlots: d.scheduleSlots || [],
-      };
-    }
-  } catch (e) {
-    console.warn('getDeliveryConfig failed', e);
+    const d = await getDoc(doc(db, 'supermarkets', smId));
+    return d.exists() ? ({ id: d.id, ...(d.data() as any) } as Supermarket) : null;
+  } catch {
+    return null;
   }
-  return DEMO_DELIVERY;
 }
 
-/* ----------------------------- Categories ----------------------------- */
-
-export function subscribeCategories(smId: string, cb: (c: Category[]) => void) {
-  if (demoMode) {
-    cb(DEMO_CATEGORIES);
-    return () => {};
-  }
-  const q = query(collection(db, `supermarkets/${smId}/categories`));
+export function subscribeSupermarket(smId: string, cb: (sm: Supermarket | null) => void) {
   return onSnapshot(
-    q,
+    doc(db, 'supermarkets', smId),
+    (d) => cb(d.exists() ? ({ id: d.id, ...(d.data() as any) } as Supermarket) : null),
+    (err) => {
+      console.warn('subscribeSupermarket error', err);
+      cb(null);
+    },
+  );
+}
+
+/* ----------------------------- Gondolas ----------------------------- */
+
+export function subscribeGondolas(smId: string, cb: (list: Gondola[]) => void) {
+  return onSnapshot(
+    query(collection(db, `supermarkets/${smId}/gondolas`)),
     (snap) => {
-      const cats = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as Category));
-      cats.sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
-      cb(cats.length ? cats : DEMO_CATEGORIES);
+      const list: Gondola[] = [];
+      snap.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
+      list.sort((a, b) => (a.order || 0) - (b.order || 0));
+      cb(list);
     },
     (err) => {
-      console.warn('subscribeCategories error', err);
-      cb(DEMO_CATEGORIES);
+      console.warn('subscribeGondolas error', err);
+      cb([]);
     },
   );
 }
 
 /* ----------------------------- Products ----------------------------- */
+// Real-time so stock & price updates reflect almost instantly (RNF06).
 
-function mapProduct(smId: string, id: string, data: any): Product {
-  const price = Number(data.price) || 0;
-  const original = data.originalPrice ? Number(data.originalPrice) : undefined;
-  const discountPercent =
-    data.discountPercent ??
-    (original && original > price ? Math.round((1 - price / original) * 100) : undefined);
-  return {
-    id,
-    supermarketId: smId,
-    name: data.name || 'Produto',
-    description: data.description,
-    imageUrl: data.imageUrl || (data.images?.[0] ?? undefined),
-    images: data.images,
-    price,
-    originalPrice: original,
-    discountPercent,
-    categoryId: data.categoryId,
-    categoryName: data.categoryName,
-    brand: data.brand,
-    unit: data.unit || 'un',
-    stock: data.stock,
-    active: data.active ?? true,
-    tags: data.tags || [],
-    barcode: data.barcode,
-    nutrition: data.nutrition,
-    ageRestricted: data.ageRestricted ?? false,
-    options: data.options || [],
-    rating: data.rating,
-    ratingCount: data.ratingCount,
-  };
-}
-
-/** Real-time catalog listener — reflects stock/price changes instantly (RNF06). */
-export function subscribeProducts(smId: string, cb: (p: Product[]) => void) {
-  if (demoMode) {
-    cb(DEMO_PRODUCTS);
-    return () => {};
-  }
-  const q = query(collection(db, `supermarkets/${smId}/products`), where('active', '==', true));
+export function subscribeProducts(smId: string, cb: (list: Product[]) => void) {
   return onSnapshot(
-    q,
+    query(collection(db, `supermarkets/${smId}/products`)),
     (snap) => {
-      const products = snap.docs.map((d) => mapProduct(smId, d.id, d.data()));
-      cb(products.length ? products : DEMO_PRODUCTS);
+      const list: Product[] = [];
+      snap.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
+      list.sort((a, b) => (a.order || 0) - (b.order || 0));
+      cb(list);
     },
     (err) => {
       console.warn('subscribeProducts error', err);
-      cb(DEMO_PRODUCTS);
+      cb([]);
     },
   );
 }
 
-export async function getProduct(smId: string, id: string): Promise<Product | null> {
-  if (demoMode) return DEMO_PRODUCTS.find((p) => p.id === id) || null;
+/* ----------------------------- Promotions ----------------------------- */
+
+export function subscribePromotions(smId: string, cb: (list: Promotion[]) => void) {
+  return onSnapshot(
+    query(collection(db, `supermarkets/${smId}/promotions`)),
+    (snap) => {
+      const list: Promotion[] = [];
+      snap.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
+      cb(list.filter((p) => p.active !== false));
+    },
+    (err) => {
+      console.warn('subscribePromotions error', err);
+      cb([]);
+    },
+  );
+}
+
+/* ----------------------------- Store config ----------------------------- */
+
+export function subscribeDeliveryConfig(smId: string, cb: (c: DeliveryConfig | null) => void) {
+  return onSnapshot(
+    doc(db, `supermarkets/${smId}/deliveryConfig/main`),
+    (d) => cb(d.exists() ? (d.data() as DeliveryConfig) : null),
+    () => cb(null),
+  );
+}
+
+export function subscribeStoreInfo(smId: string, cb: (c: StoreInfo | null) => void) {
+  return onSnapshot(
+    doc(db, `supermarkets/${smId}/settings/storeInfo`),
+    (d) => cb(d.exists() ? (d.data() as StoreInfo) : null),
+    () => cb(null),
+  );
+}
+
+export function subscribeAppConfig(smId: string, cb: (c: AppConfig | null) => void) {
+  return onSnapshot(
+    doc(db, `supermarkets/${smId}/storefront/appConfig`),
+    (d) => {
+      if (!d.exists()) return cb(null);
+      try {
+        cb(JSON.parse((d.data() as any).configJson) as AppConfig);
+      } catch {
+        cb(null);
+      }
+    },
+    () => cb(null),
+  );
+}
+
+export function subscribeStorefrontConfig(smId: string, cb: (c: any | null) => void) {
+  return onSnapshot(
+    doc(db, `supermarkets/${smId}/storefront/config`),
+    (d) => {
+      if (!d.exists()) return cb(null);
+      try {
+        cb(JSON.parse((d.data() as any).configJson));
+      } catch {
+        cb(null);
+      }
+    },
+    () => cb(null),
+  );
+}
+
+/**
+ * Available stock for a product. The loja catalog writes `stockQuantity`; we
+ * also accept a legacy `stock` field. Returns `undefined` when the store does
+ * not track stock for this item (treated as always available).
+ */
+export function availableStock(p: Product): number | undefined {
+  if (typeof p.stockQuantity === 'number') return p.stockQuantity;
+  if (typeof p.stock === 'number') return p.stock;
+  return undefined;
+}
+
+/** One-shot read of opening hours to decide if a store is currently open. */
+export async function getStoreInfoOnce(smId: string): Promise<StoreInfo | null> {
   try {
-    const snap = await getDoc(doc(db, `supermarkets/${smId}/products/${id}`));
-    if (snap.exists()) return mapProduct(smId, id, snap.data());
-  } catch (e) {
-    console.warn('getProduct failed', e);
+    const d = await getDoc(doc(db, `supermarkets/${smId}/settings/storeInfo`));
+    return d.exists() ? (d.data() as StoreInfo) : null;
+  } catch {
+    return null;
   }
-  return DEMO_PRODUCTS.find((p) => p.id === id) || null;
 }
-
-/* ----------------------------- Helpers ----------------------------- */
-
-export function groupByCategory(products: Product[], categories: Category[]) {
-  const byId = new Map<string, Product[]>();
-  for (const p of products) {
-    const key = p.categoryId || 'outros';
-    if (!byId.has(key)) byId.set(key, []);
-    byId.get(key)!.push(p);
-  }
-  return categories
-    .map((c) => ({ category: c, products: byId.get(c.id) || [] }))
-    .filter((g) => g.products.length > 0);
-}
-
-export const onSale = (p: Product) =>
-  !!p.originalPrice && p.originalPrice > p.price;
-
-export const inStock = (p: Product) => p.stock === undefined || p.stock > 0;

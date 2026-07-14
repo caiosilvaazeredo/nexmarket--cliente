@@ -3,10 +3,9 @@ import * as ImageManipulator from 'expo-image-manipulator';
 
 /**
  * Pick (or capture) an image, downscale + compress it and return a base64
- * JPEG data URI. We store images inline in Firestore exactly like the loja
- * app does (logo/product images), which avoids any Cloud Storage rules and
- * keeps the two apps consistent. Compression keeps each image well under the
- * Firestore document size limit.
+ * JPEG data URI. We store images inline in Firestore exactly like the loja and
+ * entregador apps do, which keeps the three apps consistent and avoids extra
+ * Storage rules. Compression keeps each image well under the Firestore limit.
  */
 export async function pickImage(opts?: {
   camera?: boolean;

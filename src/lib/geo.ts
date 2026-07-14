@@ -18,63 +18,26 @@ export function distanceMeters(
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-export function isValidGeo(p?: GeoPoint | null): p is GeoPoint {
+export function isValidGeo(p?: GeoPoint | { lat?: number; lng?: number } | null): p is GeoPoint {
   return !!p && typeof p.lat === 'number' && typeof p.lng === 'number';
 }
 
-/**
- * Opens turn-by-turn navigation in the driver's preferred external app
- * (Google Maps or Waze). Falls back to a generic geo/maps URL.
- */
-export async function openNavigation(
+/** Open external maps directions to a destination. */
+export async function openDirections(
   dest: { lat: number; lng: number },
-  app: 'google' | 'waze' = 'google',
   label?: string,
 ) {
   const { lat, lng } = dest;
+  const q = label ? encodeURIComponent(label) : `${lat},${lng}`;
   const candidates: string[] = [];
-
-  if (app === 'waze') {
-    candidates.push(`waze://?ll=${lat},${lng}&navigate=yes`);
-    candidates.push(`https://waze.com/ul?ll=${lat},${lng}&navigate=yes`);
-  }
-
-  // Google Maps (native scheme on iOS, geo intent on Android) + web fallback
   if (Platform.OS === 'ios') {
     candidates.push(`comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`);
   } else {
     candidates.push(`google.navigation:q=${lat},${lng}`);
   }
-  const q = label ? encodeURIComponent(label) : `${lat},${lng}`;
   candidates.push(
     `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&destination_place_id=${q}`,
   );
-
-  for (const url of candidates) {
-    try {
-      const ok = await Linking.canOpenURL(url);
-      if (ok) {
-        await Linking.openURL(url);
-        return;
-      }
-    } catch {
-      // try next
-    }
-  }
-  // last resort
-  await Linking.openURL(
-    `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`,
-  );
-}
-
-/** Open navigation to a free-text address/place query (no coordinates). */
-export async function openNavigationQuery(query: string, app: 'google' | 'waze' = 'google') {
-  const q = encodeURIComponent(query);
-  const candidates =
-    app === 'waze'
-      ? [`waze://?q=${q}&navigate=yes`, `https://waze.com/ul?q=${q}&navigate=yes`]
-      : [];
-  candidates.push(`https://www.google.com/maps/dir/?api=1&destination=${q}`);
   for (const url of candidates) {
     try {
       if (await Linking.canOpenURL(url)) {
@@ -83,7 +46,7 @@ export async function openNavigationQuery(query: string, app: 'google' | 'waze' 
       }
     } catch {}
   }
-  await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${q}`);
+  await Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
 }
 
 /** Default map region centered on a point with a small zoom delta. */
@@ -93,5 +56,24 @@ export function regionFor(p: { lat: number; lng: number }, delta = 0.02) {
     longitude: p.lng,
     latitudeDelta: delta,
     longitudeDelta: delta,
+  };
+}
+
+/** A region that comfortably contains two points (driver + destination). */
+export function regionForBounds(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+) {
+  const minLat = Math.min(a.lat, b.lat);
+  const maxLat = Math.max(a.lat, b.lat);
+  const minLng = Math.min(a.lng, b.lng);
+  const maxLng = Math.max(a.lng, b.lng);
+  const latPad = Math.max((maxLat - minLat) * 0.6, 0.008);
+  const lngPad = Math.max((maxLng - minLng) * 0.6, 0.008);
+  return {
+    latitude: (minLat + maxLat) / 2,
+    longitude: (minLng + maxLng) / 2,
+    latitudeDelta: maxLat - minLat + latPad * 2,
+    longitudeDelta: maxLng - minLng + lngPad * 2,
   };
 }

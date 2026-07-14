@@ -1,146 +1,202 @@
-import React, { useMemo, useState } from 'react';
-import { View, Text, Pressable, ScrollView, Alert } from 'react-native';
+import React, { useMemo, useState, useEffect } from 'react';
+import { View, Text, ScrollView, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import {
-  ChevronLeft,
+  ArrowLeft,
   Bike,
   Store,
   MapPin,
   Clock,
   CreditCard,
-  Banknote,
   QrCode,
+  Banknote,
+  Ticket,
   Check,
   Plus,
+  Wallet,
 } from 'lucide-react-native';
 
-import { useColors } from '../src/hooks/useColors';
-import { font, fontSize, radius, spacing, shadow } from '../src/lib/theme';
-import { brl } from '../src/lib/format';
-import { distanceMeters } from '../src/lib/geo';
 import { Button } from '../src/components/ui/Button';
 import { Input } from '../src/components/ui/Input';
-import { useStore, selectSelectedAddress, selectCartSubtotal } from '../src/store/useStore';
-import { computeTotals, clearCart } from '../src/lib/cart';
-import { applyCoupon } from '../src/lib/coupons';
-import { placeOrder } from '../src/lib/orders';
-import { PAYMENT_LABELS, tokenizeCard, maskCardNumber } from '../src/lib/payments';
-import type { DeliveryMethod, PaymentMethod, DeliveryAddress } from '../src/lib/types';
+import { PayOnlineSheet } from '../src/components/PayOnlineSheet';
+import { useColors } from '../src/hooks/useColors';
+import { font, fontSize, radius, spacing, shadow } from '../src/lib/theme';
+import { brl, fullAddress } from '../src/lib/format';
+import { useAppStore } from '../src/store/useAppStore';
+import { useCartStore } from '../src/store/useCartStore';
+import { lineTotal, effectiveUnitPrice, applyCoupon } from '../src/lib/promotions';
+import { computeDeliveryFee, meetsMinimum, surgeActive } from '../src/lib/storeHours';
+import { placeOrder, markPaid } from '../src/lib/orders';
+import { spendWallet } from '../src/lib/wallet';
+import { getGatewayConfig, type GatewayPublicConfig } from '../src/lib/payments';
+import { successHaptic, getExpoPushToken } from '../src/lib/notifications';
+import type { PaymentMethod, FulfillmentType, Order } from '../src/lib/types';
+
+/** Métodos cobrados online (abrem a folha de pagamento após criar o pedido). */
+const ONLINE_METHODS: PaymentMethod[] = ['pix', 'card_online', 'picpay', 'nupay'];
 
 export default function Checkout() {
   const { colors } = useColors();
   const router = useRouter();
-  const cart = useStore((s) => s.cart);
-  const subtotal = useStore(selectCartSubtotal);
-  const supermarket = useStore((s) => s.supermarket);
-  const config = useStore((s) => s.deliveryConfig);
-  const customer = useStore((s) => s.customer);
-  const authUser = useStore((s) => s.authUser);
-  const address = useStore(selectSelectedAddress);
-  const couponCode = useStore((s) => s.couponCode);
-  const orders = useStore((s) => s.orders);
 
-  const [step, setStep] = useState(1);
-  const [method, setMethod] = useState<DeliveryMethod>(config?.deliveryEnabled ? 'delivery' : 'pickup');
-  const [payment, setPayment] = useState<PaymentMethod>('pix');
-  const [slot, setSlot] = useState<string | null>(null);
+  const authUser = useAppStore((s) => s.authUser);
+  const customer = useAppStore((s) => s.customer);
+  const currentSmId = useAppStore((s) => s.currentSmId);
+  const promotions = useAppStore((s) => s.promotions);
+  const deliveryConfig = useAppStore((s) => s.deliveryConfig);
+  const storeInfo = useAppStore((s) => s.storeInfo);
+  const brandName = useAppStore((s) => s.brand.name);
+
+  const lines = useCartStore((s) => s.lines);
+  const couponCode = useCartStore((s) => s.couponCode);
+  const couponDiscount = useCartStore((s) => s.couponDiscount);
+  const clear = useCartStore((s) => s.clear);
+
+  const [fulfillment, setFulfillment] = useState<FulfillmentType>('delivery');
+  const [addressId, setAddressId] = useState<string | null>(customer?.defaultAddressId || customer?.addresses?.[0]?.id || null);
+  const [schedule, setSchedule] = useState<string | null>(null);
+  const [payment, setPayment] = useState<PaymentMethod | null>(null);
   const [changeFor, setChangeFor] = useState('');
+  const [notes, setNotes] = useState('');
+  const [tip, setTip] = useState(0);
+  const [tipCustom, setTipCustom] = useState('');
+  const [useWallet, setUseWallet] = useState(false);
   const [placing, setPlacing] = useState(false);
+  const [payModal, setPayModal] = useState<{ orderId: string } | null>(null);
 
-  // Inline card capture for card_online.
-  const [card, setCard] = useState({ number: '', holderName: '', expMonth: '', expYear: '', cvv: '' });
-
-  const distanceKm = useMemo(() => {
-    if (method !== 'delivery') return 0;
-    if (supermarket?.location && address?.lat && address?.lng) {
-      return distanceMeters(supermarket.location, { lat: address.lat, lng: address.lng }) / 1000;
+  // Require login for checkout (RNF11 — orders tied to a real account).
+  useEffect(() => {
+    if (authUser === null) {
+      router.replace('/(auth)/login?next=/checkout');
     }
-    return 2;
-  }, [method, supermarket, address]);
+  }, [authUser]);
 
-  // Recompute coupon discount against the live subtotal.
-  const [discount, setDiscount] = useState(0);
-  const [freeShip, setFreeShip] = useState(false);
-  React.useEffect(() => {
-    if (couponCode && supermarket) {
-      applyCoupon(supermarket.id, couponCode, subtotal, orders.length === 0).then((r) => {
-        setDiscount(r.ok ? r.discount || 0 : 0);
-        setFreeShip(!!r.ok && !!r.freeShipping);
-      });
-    }
-  }, [couponCode, subtotal, supermarket]);
+  const myOrders = useAppStore((s) => s.myOrders);
+  const subtotal = useMemo(() => lines.reduce((a, l) => a + lineTotal(l.product, l.quantity, promotions), 0), [lines, promotions]);
+  const deliveryFee = fulfillment === 'delivery' ? computeDeliveryFee(deliveryConfig) : 0;
+  // Re-evaluate the coupon against the chosen fulfillment so a free-shipping
+  // coupon doesn't grant a phantom discount on a pickup order.
+  const discount = useMemo(() => {
+    if (!couponCode) return 0;
+    const res = applyCoupon(couponCode, subtotal, promotions, { isFirstOrder: myOrders.length === 0, deliveryFee });
+    return res.ok ? res.discount : couponDiscount || 0;
+  }, [couponCode, subtotal, promotions, deliveryFee, myOrders.length, couponDiscount]);
+  // Gorjeta: 100% vai para o entregador; só em pedidos com entrega.
+  const tipValue = fulfillment === 'delivery' ? tip : 0;
+  const totalBeforeWallet = Math.max(0, subtotal + deliveryFee - discount) + tipValue;
+  // Carteira (cashback): saldo pode abater até o valor total do pedido.
+  const walletBalance = Number(customer?.walletBalance || 0);
+  const walletUsed = useWallet ? Math.min(walletBalance, totalBeforeWallet) : 0;
+  const total = Number(Math.max(0, totalBeforeWallet - walletUsed).toFixed(2));
+  const surge = surgeActive(deliveryConfig);
+  const min = meetsMinimum(deliveryConfig, subtotal);
 
-  const totals = useMemo(
-    () => computeTotals({ items: cart, config, method, distanceKm, discount, freeShippingCoupon: freeShip, minOrder: supermarket?.minOrder }),
-    [cart, config, method, distanceKm, discount, freeShip, supermarket],
+  const address = customer?.addresses?.find((a) => a.id === addressId) || null;
+
+  // Carteiras extras (PicPay/NuPay) aparecem apenas quando o servidor habilita.
+  const [gwConfig, setGwConfig] = useState<GatewayPublicConfig>({});
+  useEffect(() => {
+    getGatewayConfig().then(setGwConfig).catch(() => {});
+  }, []);
+
+  const paymentOptions = useMemo(
+    () => buildPaymentOptions(storeInfo?.paymentMethods, gwConfig.wallets),
+    [storeInfo, gwConfig],
   );
 
-  // Login firewall (RNF03 — only blocks at the very end of the funnel).
-  const requireLogin = authUser?.isAnonymous;
+  useEffect(() => {
+    if (!payment && paymentOptions.length) setPayment(paymentOptions[0].method);
+  }, [paymentOptions]);
 
-  const canContinueStep1 =
-    (method === 'pickup' || (method === 'delivery' && !!address)) &&
-    (payment !== 'card_online' || !!card.number);
+  const scheduleSlots = useMemo(() => buildScheduleSlots(), []);
 
-  const confirm = async () => {
-    if (requireLogin) {
-      Alert.alert('Quase lá!', 'Entre ou crie sua conta para finalizar o pedido.', [
-        { text: 'Agora não', style: 'cancel' },
-        { text: 'Entrar', onPress: () => router.push('/(auth)/login') },
+  if (!lines.length) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+        <Text style={{ color: colors.textMuted, fontWeight: font.bold }}>Seu carrinho está vazio.</Text>
+        <Button label="Voltar" variant="ghost" fullWidth={false} onPress={() => router.replace('/(tabs)')} />
+      </SafeAreaView>
+    );
+  }
+
+  const finalize = async () => {
+    if (fulfillment === 'delivery' && !address) {
+      Alert.alert('Endereço', 'Adicione um endereço de entrega para continuar.', [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Adicionar', onPress: () => router.push('/address-edit') },
       ]);
       return;
     }
-    if (!customer || !supermarket) return;
-    if (method === 'delivery' && !address) {
-      Alert.alert('Endereço', 'Selecione um endereço de entrega.');
+    if (!min.ok) {
+      Alert.alert('Pedido mínimo', `Faltam ${brl(min.missing)} para o pedido mínimo.`);
       return;
     }
+    if (!payment) return;
+
     setPlacing(true);
     try {
-      let paymentTokenId: string | undefined;
-      if (payment === 'card_online') {
-        const token = await tokenizeCard(card);
-        paymentTokenId = token.id;
-      }
-      const deliveryAddress: DeliveryAddress | undefined =
-        method === 'delivery' && address
-          ? {
-              street: address.street,
-              number: address.number,
-              complement: address.complement,
-              neighborhood: address.neighborhood,
-              city: address.city,
-              state: address.state,
-              reference: address.reference,
-              lat: address.lat,
-              lng: address.lng,
-            }
-          : undefined;
-
+      const items = lines.map((l) => ({
+        productId: l.product.id,
+        name: l.product.name,
+        quantity: l.quantity,
+        price: effectiveUnitPrice(l.product, promotions),
+        imageUrl: l.product.imageUrl,
+        unit: l.product.unit,
+      }));
+      const pushToken = await getExpoPushToken();
       const orderId = await placeOrder({
-        supermarketId: supermarket.id,
-        customer,
-        items: cart,
-        subtotal: totals.subtotal,
-        deliveryFee: totals.deliveryFee,
-        discount: totals.discount,
-        total: totals.total,
-        couponCode,
-        deliveryMethod: method,
-        deliveryAddress,
-        scheduledFor: slot,
+        supermarketId: currentSmId!,
+        items,
+        subtotal,
+        deliveryFee,
+        discount,
+        total,
+        tip: tipValue,
+        walletUsed,
+        pushToken,
+        couponCode: couponCode || undefined,
+        fulfillment,
         paymentMethod: payment,
-        paymentTokenId,
-        changeFor: payment === 'cash_delivery' && changeFor ? Number(changeFor.replace(',', '.')) : undefined,
-        storeName: supermarket.name,
-        storeLogoUrl: supermarket.logoUrl,
-        storeLocation: supermarket.location,
+        customerName: customer?.name || 'Cliente',
+        customerPhone: customer?.phone || '',
+        deliveryAddress:
+          fulfillment === 'delivery' && address
+            ? {
+                street: address.street,
+                number: address.number,
+                complement: address.complement,
+                neighborhood: address.neighborhood,
+                city: address.city,
+                state: address.state,
+                reference: address.reference,
+                ...(typeof address.lat === 'number' && typeof address.lng === 'number' ? { lat: address.lat, lng: address.lng } : {}),
+              }
+            : undefined,
+        scheduledFor: schedule,
+        changeFor: payment === 'cash_delivery' && changeFor ? Number(changeFor.replace(',', '.')) : null,
+        notes,
       });
-      clearCart();
-      router.replace(`/order/${orderId}?sm=${supermarket.id}&new=1`);
+      successHaptic();
+
+      // Debita o saldo da carteira usado neste pedido.
+      if (walletUsed > 0 && authUser) {
+        spendWallet(authUser.uid, walletUsed).catch(() => {});
+      }
+
+      if (ONLINE_METHODS.includes(payment) && total > 0) {
+        setPayModal({ orderId });
+      } else if (ONLINE_METHODS.includes(payment) && total === 0) {
+        // Carteira cobriu tudo — nada a cobrar online.
+        await markPaid({ supermarketId: currentSmId!, id: orderId } as Order).catch(() => {});
+        clear();
+        router.replace(`/order/${orderId}?sm=${currentSmId}&new=1&paid=1`);
+      } else {
+        clear();
+        router.replace(`/order/${orderId}?sm=${currentSmId}&new=1`);
+      }
     } catch (e: any) {
-      Alert.alert('Não foi possível finalizar', e?.message || 'Tente outro método de pagamento.');
+      Alert.alert('Erro', e?.message || 'Não foi possível criar o pedido. Tente novamente.');
     } finally {
       setPlacing(false);
     }
@@ -148,138 +204,233 @@ export default function Checkout() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
-      {/* Header + step indicator */}
-      <View style={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          <Pressable onPress={() => (step === 1 ? router.back() : setStep(1))} style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.card, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
-            <ChevronLeft size={24} color={colors.text} />
-          </Pressable>
-          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize['2xl'] }}>{step === 1 ? 'Entrega e pagamento' : 'Revisar pedido'}</Text>
-        </View>
-        <View style={{ flexDirection: 'row', gap: 6 }}>
-          {[1, 2].map((s) => (
-            <View key={s} style={{ flex: 1, height: 5, borderRadius: 3, backgroundColor: s <= step ? colors.primary : colors.border }} />
-          ))}
-        </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
+        <Pressable onPress={() => router.back()} hitSlop={10} style={{ padding: 6 }}>
+          <ArrowLeft size={24} color={colors.text} />
+        </Pressable>
+        <Text style={{ flex: 1, color: colors.text, fontWeight: font.black, fontSize: fontSize['2xl'] }}>Finalizar pedido</Text>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }} showsVerticalScrollIndicator={false}>
-        {step === 1 ? (
-          <>
-            {/* Delivery method (RF14) */}
-            <Section title="Como você quer receber?" colors={colors}>
-              <View style={{ flexDirection: 'row', gap: spacing.md }}>
-                <MethodCard active={method === 'delivery'} disabled={!config?.deliveryEnabled} icon={<Bike size={22} color={method === 'delivery' ? '#FFFFFF' : colors.primary} />} title="Delivery" subtitle={`~${config?.estimatedMinutes ?? 40} min`} onPress={() => setMethod('delivery')} colors={colors} />
-                <MethodCard active={method === 'pickup'} disabled={!config?.pickupEnabled} icon={<Store size={22} color={method === 'pickup' ? '#FFFFFF' : colors.primary} />} title="Retirar na loja" subtitle="Sem frete" onPress={() => setMethod('pickup')} colors={colors} />
-              </View>
-            </Section>
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 180, gap: spacing.lg }} showsVerticalScrollIndicator={false}>
+        {/* 1. Fulfillment */}
+        <Section title="Como você quer receber?" colors={colors}>
+          <View style={{ flexDirection: 'row', gap: spacing.md }}>
+            <OptionBig active={fulfillment === 'delivery'} onPress={() => setFulfillment('delivery')} icon={<Bike size={22} color={fulfillment === 'delivery' ? colors.primary : colors.textMuted} />} title="Entrega" subtitle={deliveryFee > 0 ? brl(deliveryFee) : 'Grátis'} colors={colors} />
+            <OptionBig active={fulfillment === 'pickup'} onPress={() => setFulfillment('pickup')} icon={<Store size={22} color={fulfillment === 'pickup' ? colors.primary : colors.textMuted} />} title="Retirar na loja" subtitle="Sem frete" colors={colors} />
+          </View>
+        </Section>
 
-            {/* Address (RF03/RF04) */}
-            {method === 'delivery' && (
-              <Section title="Endereço de entrega" colors={colors}>
-                <Pressable onPress={() => router.push('/address')} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 2, borderColor: colors.border, borderRadius: radius.lg, padding: 14 }}>
-                  <MapPin size={22} color={colors.primary} />
+        {/* 2. Address (delivery) */}
+        {fulfillment === 'delivery' ? (
+          <Section title="Endereço de entrega" colors={colors}>
+            {customer?.addresses?.length ? (
+              customer.addresses.map((a) => (
+                <Pressable key={a.id} onPress={() => setAddressId(a.id)} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderRadius: radius.lg, borderWidth: 2, borderColor: addressId === a.id ? colors.primary : colors.border, backgroundColor: addressId === a.id ? colors.primarySoft : colors.card, padding: spacing.md }}>
+                  <MapPin size={20} color={addressId === a.id ? colors.primary : colors.textMuted} />
                   <View style={{ flex: 1 }}>
-                    {address ? (
-                      <>
-                        <Text style={{ color: colors.text, fontWeight: font.bold }}>{[address.street, address.number].filter(Boolean).join(', ')}</Text>
-                        <Text style={{ color: colors.textMuted, fontSize: fontSize.sm }}>{[address.neighborhood, address.city].filter(Boolean).join(' - ')}</Text>
-                      </>
-                    ) : (
-                      <Text style={{ color: colors.textMuted, fontWeight: font.semibold }}>Selecionar endereço</Text>
-                    )}
+                    <Text style={{ color: colors.text, fontWeight: font.black, textTransform: 'capitalize' }}>{a.nickname || a.label}</Text>
+                    <Text numberOfLines={1} style={{ color: colors.textMuted, fontSize: fontSize.sm }}>{fullAddress(a)}</Text>
                   </View>
-                  <Text style={{ color: colors.primary, fontWeight: font.bold }}>Trocar</Text>
+                  {addressId === a.id ? <Check size={20} color={colors.primary} /> : null}
                 </Pressable>
-              </Section>
-            )}
-
-            {/* Schedule (RF16) */}
-            {config?.scheduleEnabled && config.scheduleSlots?.length ? (
-              <Section title="Agendar entrega (opcional)" colors={colors}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-                  <Chip label="Assim que possível" active={!slot} onPress={() => setSlot(null)} colors={colors} icon={<Clock size={14} color={!slot ? '#FFFFFF' : colors.textMuted} />} />
-                  {config.scheduleSlots.map((s) => (
-                    <Chip key={s} label={s} active={slot === s} onPress={() => setSlot(s)} colors={colors} />
-                  ))}
-                </ScrollView>
-              </Section>
+              ))
             ) : null}
-
-            {/* Payment (RF15) */}
-            <Section title="Pagamento" colors={colors}>
-              <View style={{ gap: 8 }}>
-                <PayOption method="pix" icon={<QrCode size={20} color={colors.text} />} active={payment === 'pix'} onPress={() => setPayment('pix')} colors={colors} />
-                <PayOption method="card_online" icon={<CreditCard size={20} color={colors.text} />} active={payment === 'card_online'} onPress={() => setPayment('card_online')} colors={colors} />
-                <PayOption method="card_delivery" icon={<CreditCard size={20} color={colors.text} />} active={payment === 'card_delivery'} onPress={() => setPayment('card_delivery')} colors={colors} />
-                <PayOption method="cash_delivery" icon={<Banknote size={20} color={colors.text} />} active={payment === 'cash_delivery'} onPress={() => setPayment('cash_delivery')} colors={colors} />
-              </View>
-
-              {payment === 'card_online' && (
-                <View style={{ gap: spacing.sm, marginTop: spacing.md }}>
-                  <Input placeholder="Número do cartão" keyboardType="number-pad" value={card.number} onChangeText={(v) => setCard({ ...card, number: maskCardNumber(v) })} icon={<CreditCard size={20} color={colors.textSubtle} />} />
-                  <Input placeholder="Nome impresso no cartão" autoCapitalize="characters" value={card.holderName} onChangeText={(v) => setCard({ ...card, holderName: v })} />
-                  <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-                    <Input containerStyle={{ flex: 1 }} placeholder="MM" keyboardType="number-pad" maxLength={2} value={card.expMonth} onChangeText={(v) => setCard({ ...card, expMonth: v })} />
-                    <Input containerStyle={{ flex: 1 }} placeholder="AA" keyboardType="number-pad" maxLength={4} value={card.expYear} onChangeText={(v) => setCard({ ...card, expYear: v })} />
-                    <Input containerStyle={{ flex: 1 }} placeholder="CVV" keyboardType="number-pad" maxLength={4} secureTextEntry value={card.cvv} onChangeText={(v) => setCard({ ...card, cvv: v })} />
-                  </View>
-                  <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, fontWeight: font.medium }}>
-                    🔒 Seus dados vão tokenizados direto para o provedor de pagamento. Nunca salvamos seu cartão.
-                  </Text>
-                </View>
-              )}
-              {payment === 'cash_delivery' && (
-                <Input containerStyle={{ marginTop: spacing.md }} placeholder="Troco para quanto? (opcional)" keyboardType="number-pad" value={changeFor} onChangeText={setChangeFor} icon={<Banknote size={20} color={colors.textSubtle} />} />
-              )}
-            </Section>
-          </>
+            <Button label="Adicionar endereço" variant="secondary" icon={<Plus size={18} color={colors.text} />} onPress={() => router.push('/address-edit')} />
+          </Section>
         ) : (
-          <>
-            {/* Review (RF17) */}
-            <Section title={`${cart.length} ${cart.length === 1 ? 'item' : 'itens'}`} colors={colors}>
-              {cart.map((i) => (
-                <View key={i.key} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 }}>
-                  <Text style={{ color: colors.text, fontWeight: font.medium, flex: 1 }} numberOfLines={1}>{i.quantity}× {i.name}</Text>
-                  <Text style={{ color: colors.text, fontWeight: font.bold }}>{brl(i.price * i.quantity)}</Text>
-                </View>
-              ))}
-            </Section>
-
-            <Section title="Entrega" colors={colors}>
-              <Row label={method === 'delivery' ? 'Delivery' : 'Retirada na loja'} value={method === 'delivery' ? `~${config?.estimatedMinutes ?? 40} min` : 'Na loja'} colors={colors} />
-              {method === 'delivery' && address && <Row label="Endereço" value={[address.street, address.number].filter(Boolean).join(', ')} colors={colors} />}
-              <Row label="Quando" value={slot || 'Assim que possível'} colors={colors} />
-              <Row label="Pagamento" value={PAYMENT_LABELS[payment]} colors={colors} />
-            </Section>
-
-            <Section title="Resumo de valores" colors={colors}>
-              <Row label="Subtotal" value={brl(totals.subtotal)} colors={colors} />
-              {totals.discount > 0 && <Row label={`Desconto ${couponCode ? `(${couponCode})` : ''}`} value={`− ${brl(totals.discount)}`} colors={colors} accent={colors.primaryDark} />}
-              <Row label="Frete" value={totals.freeShipping ? 'Grátis' : brl(totals.deliveryFee)} colors={colors} />
-              <View style={{ height: 1, backgroundColor: colors.border, marginVertical: 6 }} />
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg }}>Total</Text>
-                <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>{brl(totals.total)}</Text>
-              </View>
-            </Section>
-          </>
+          <Section title="Retirada na loja" colors={colors}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderRadius: radius.lg, borderWidth: 2, borderColor: colors.border, padding: spacing.md }}>
+              <Store size={20} color={colors.primary} />
+              <Text style={{ flex: 1, color: colors.textMuted, fontSize: fontSize.sm }}>{storeInfo?.storeLocation?.address || `Retire seu pedido em ${brandName}`}</Text>
+            </View>
+          </Section>
         )}
+
+        {/* 3. Schedule */}
+        <Section title="Quando?" colors={colors}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+            <SlotChip label="Assim que possível" active={!schedule} onPress={() => setSchedule(null)} colors={colors} icon={<Clock size={14} color={!schedule ? '#fff' : colors.textMuted} />} />
+            {scheduleSlots.map((s) => (
+              <SlotChip key={s.value} label={s.label} active={schedule === s.value} onPress={() => setSchedule(s.value)} colors={colors} />
+            ))}
+          </ScrollView>
+        </Section>
+
+        {/* 4. Payment */}
+        <Section title="Pagamento" colors={colors}>
+          {paymentOptions.map((opt) => (
+            <Pressable key={opt.method} onPress={() => setPayment(opt.method)} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderRadius: radius.lg, borderWidth: 2, borderColor: payment === opt.method ? colors.primary : colors.border, backgroundColor: payment === opt.method ? colors.primarySoft : colors.card, padding: spacing.md }}>
+              {opt.icon(payment === opt.method ? colors.primary : colors.textMuted)}
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontWeight: font.bold }}>{opt.label}</Text>
+                {opt.hint ? <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs }}>{opt.hint}</Text> : null}
+              </View>
+              {payment === opt.method ? <Check size={20} color={colors.primary} /> : null}
+            </Pressable>
+          ))}
+          {payment === 'cash_delivery' ? (
+            <Input label="Troco para quanto? (opcional)" placeholder="Ex: 100,00" keyboardType="numeric" value={changeFor} onChangeText={setChangeFor} icon={<Banknote size={18} color={colors.textSubtle} />} />
+          ) : null}
+
+          {/* Carteira (cashback) como desconto */}
+          {walletBalance > 0 ? (
+            <Pressable
+              onPress={() => setUseWallet((v) => !v)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderRadius: radius.lg, borderWidth: 2, borderColor: useWallet ? colors.primary : colors.border, backgroundColor: useWallet ? colors.primarySoft : colors.card, padding: spacing.md }}
+            >
+              <View style={{ width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: useWallet ? colors.primary : colors.border, backgroundColor: useWallet ? colors.primary : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
+                {useWallet ? <Check size={14} color="#fff" /> : null}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontWeight: font.bold }}>Usar saldo da carteira</Text>
+                <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs }}>
+                  Você tem {brl(walletBalance)} de cashback disponível
+                </Text>
+              </View>
+              {useWallet ? <Text style={{ color: colors.primary, fontWeight: font.black }}>- {brl(walletUsed)}</Text> : null}
+            </Pressable>
+          ) : null}
+        </Section>
+
+        {/* 5. Tip (delivery only) — 100% para o entregador */}
+        {fulfillment === 'delivery' ? (
+          <Section title="Gorjeta para o entregador" colors={colors}>
+            <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, marginTop: -4 }}>
+              100% do valor vai para quem faz a sua entrega. Você também pode dar gorjeta depois.
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {[0, 2, 5, 10].map((v) => (
+                <SlotChip
+                  key={v}
+                  label={v === 0 ? 'Sem gorjeta' : brl(v)}
+                  active={tip === v && !tipCustom}
+                  onPress={() => {
+                    setTip(v);
+                    setTipCustom('');
+                  }}
+                  colors={colors}
+                />
+              ))}
+            </ScrollView>
+            <Input
+              label="Outro valor (opcional)"
+              placeholder="Ex: 7,50"
+              keyboardType="numeric"
+              value={tipCustom}
+              onChangeText={(t) => {
+                setTipCustom(t);
+                const v = Number(t.replace(',', '.'));
+                setTip(Number.isFinite(v) && v > 0 ? Math.min(v, 200) : 0);
+              }}
+            />
+          </Section>
+        ) : null}
+
+        {/* 6. Notes */}
+        <Section title="Observações (opcional)" colors={colors}>
+          <Input placeholder="Ex: tocar a campainha, deixar na portaria…" value={notes} onChangeText={setNotes} />
+        </Section>
+
+        {/* 6. Review */}
+        <Section title="Resumo" colors={colors}>
+          <View style={{ borderRadius: radius.lg, borderWidth: 2, borderColor: colors.border, padding: spacing.md, gap: 6 }}>
+            {lines.map((l) => (
+              <View key={l.product.id} style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text numberOfLines={1} style={{ color: colors.textMuted, flex: 1, marginRight: 8 }}>{l.quantity}x {l.product.name}</Text>
+                <Text style={{ color: colors.text, fontWeight: font.semibold }}>{brl(effectiveUnitPrice(l.product, promotions) * l.quantity)}</Text>
+              </View>
+            ))}
+            <View style={{ height: 1, backgroundColor: colors.border, marginVertical: 4 }} />
+            <Row label="Subtotal" value={brl(subtotal)} colors={colors} />
+            {discount > 0 ? <Row label="Desconto" value={`- ${brl(discount)}`} colors={colors} /> : null}
+            <Row label={surge ? 'Frete (alta demanda ⚡)' : 'Frete'} value={deliveryFee > 0 ? brl(deliveryFee) : 'Grátis'} colors={colors} />
+            {tipValue > 0 ? <Row label="Gorjeta do entregador" value={brl(tipValue)} colors={colors} /> : null}
+            {walletUsed > 0 ? <Row label="Saldo da carteira" value={`- ${brl(walletUsed)}`} colors={colors} /> : null}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
+              <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.base }}>Total</Text>
+              <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>{brl(total)}</Text>
+            </View>
+          </View>
+        </Section>
       </ScrollView>
 
-      {/* Footer action */}
-      <View style={[{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.card, borderTopWidth: 2, borderColor: colors.border, padding: spacing.lg }, shadow.raised]}>
-        {step === 1 ? (
-          <Button label={`Continuar • ${brl(totals.total)}`} size="lg" disabled={!canContinueStep1} onPress={() => setStep(2)} />
-        ) : (
-          <Button label={requireLogin ? 'Entrar e finalizar' : 'Confirmar pedido'} size="lg" loading={placing} onPress={confirm} />
-        )}
+      <View style={[{ padding: spacing.lg, backgroundColor: colors.card, borderTopWidth: 2, borderTopColor: colors.border, gap: 6 }, shadow.raised]}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={{ color: colors.textMuted, fontWeight: font.bold }}>Total a pagar</Text>
+          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>{brl(total)}</Text>
+        </View>
+        <Button label="Confirmar pedido" size="lg" loading={placing} onPress={finalize} />
       </View>
+
+      {/* Pagamento online (PIX / cartão) — Stripe real quando o servidor de
+          pagamentos está configurado; demonstração caso contrário. */}
+      {payModal ? (
+        <PayOnlineSheet
+          visible
+          method={payment}
+          smId={currentSmId!}
+          orderId={payModal.orderId}
+          total={total}
+          storeName={brandName}
+          onDone={async (paid, info) => {
+            const orderId = payModal.orderId;
+            setPayModal(null);
+            if (paid) {
+              try {
+                await markPaid({ supermarketId: currentSmId!, id: orderId } as Order, info);
+              } catch {
+                // webhook do servidor já pode ter gravado o status
+              }
+            }
+            clear();
+            router.replace(`/order/${orderId}?sm=${currentSmId}&new=1${paid ? '&paid=1' : ''}`);
+          }}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
 
-function Section({ title, children, colors }: any) {
+/* --------------------------- helpers --------------------------- */
+
+interface PayOpt {
+  method: PaymentMethod;
+  label: string;
+  hint?: string;
+  icon: (color: string) => React.ReactNode;
+}
+
+function buildPaymentOptions(pm?: any, wallets?: { picpay?: boolean; nupay?: boolean }): PayOpt[] {
+  const opts: PayOpt[] = [];
+  if (!pm || pm.pix) opts.push({ method: 'pix', label: 'PIX', hint: 'Aprovação na hora', icon: (c) => <QrCode size={22} color={c} /> });
+  if (!pm || pm.creditCardOnline) opts.push({ method: 'card_online', label: 'Cartão de crédito (online)', hint: 'Pague agora pelo app', icon: (c) => <CreditCard size={22} color={c} /> });
+  // Carteiras BR habilitadas no servidor de pagamentos (GET /config).
+  if (wallets?.picpay) opts.push({ method: 'picpay', label: 'PicPay', hint: 'Pague pelo app do PicPay', icon: (c) => <Wallet size={22} color={c} /> });
+  if (wallets?.nupay) opts.push({ method: 'nupay', label: 'NuPay (Nubank)', hint: 'Pague pelo app do Nubank', icon: (c) => <Wallet size={22} color={c} /> });
+  if (!pm || pm.creditCardDelivery || pm.debitCardDelivery)
+    opts.push({ method: 'card_delivery', label: 'Cartão na entrega', hint: 'Crédito ou débito na maquininha', icon: (c) => <CreditCard size={22} color={c} /> });
+  opts.push({ method: 'cash_delivery', label: 'Dinheiro na entrega', hint: 'Informe o troco', icon: (c) => <Banknote size={22} color={c} /> });
+  if (pm?.vouchers?.length) opts.push({ method: 'voucher_delivery', label: 'Vale-refeição na entrega', hint: pm.vouchers.slice(0, 3).join(', '), icon: (c) => <Ticket size={22} color={c} /> });
+  return opts;
+}
+
+function buildScheduleSlots(): { value: string; label: string }[] {
+  const slots: { value: string; label: string }[] = [];
+  const now = new Date();
+  for (let d = 0; d < 2; d++) {
+    const day = new Date(now);
+    day.setDate(now.getDate() + d);
+    const dayLabel = d === 0 ? 'Hoje' : 'Amanhã';
+    for (let h = 8; h <= 20; h += 2) {
+      if (d === 0 && h <= now.getHours() + 1) continue;
+      const label = `${dayLabel} ${String(h).padStart(2, '0')}:00-${String(h + 2).padStart(2, '0')}:00`;
+      slots.push({ value: `${day.toDateString()} ${h}`, label });
+    }
+  }
+  return slots.slice(0, 8);
+}
+
+function Section({ title, children, colors }: { title: string; children: React.ReactNode; colors: any }) {
   return (
     <View style={{ gap: spacing.sm }}>
       <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg }}>{title}</Text>
@@ -287,39 +438,31 @@ function Section({ title, children, colors }: any) {
     </View>
   );
 }
-function Row({ label, value, colors, accent }: any) {
+
+function OptionBig({ active, onPress, icon, title, subtitle, colors }: { active: boolean; onPress: () => void; icon: React.ReactNode; title: string; subtitle: string; colors: any }) {
   return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+    <Pressable onPress={onPress} style={{ flex: 1, alignItems: 'center', gap: 6, borderRadius: radius.lg, borderWidth: 2, borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.primarySoft : colors.card, paddingVertical: spacing.lg }}>
+      {icon}
+      <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.base }}>{title}</Text>
+      <Text style={{ color: colors.textMuted, fontSize: fontSize.xs }}>{subtitle}</Text>
+    </Pressable>
+  );
+}
+
+function SlotChip({ label, active, onPress, colors, icon }: { label: string; active: boolean; onPress: () => void; colors: any; icon?: React.ReactNode }) {
+  return (
+    <Pressable onPress={onPress} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.full, backgroundColor: active ? colors.primary : colors.card, borderWidth: 2, borderColor: active ? colors.primary : colors.border }}>
+      {icon}
+      <Text style={{ color: active ? '#fff' : colors.textMuted, fontWeight: font.bold, fontSize: fontSize.sm }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function Row({ label, value, colors }: { label: string; value: string; colors: any }) {
+  return (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
       <Text style={{ color: colors.textMuted, fontWeight: font.medium }}>{label}</Text>
-      <Text style={{ color: accent || colors.text, fontWeight: font.bold }}>{value}</Text>
+      <Text style={{ color: colors.textMuted, fontWeight: font.bold }}>{value}</Text>
     </View>
-  );
-}
-function MethodCard({ active, disabled, icon, title, subtitle, onPress, colors }: any) {
-  return (
-    <Pressable onPress={disabled ? undefined : onPress} style={{ flex: 1, opacity: disabled ? 0.4 : 1, alignItems: 'center', gap: 6, padding: spacing.md, borderRadius: radius.lg, borderWidth: 2, borderColor: active ? colors.primaryDark : colors.border, backgroundColor: active ? colors.primary : colors.card }}>
-      {icon}
-      <Text style={{ color: active ? '#FFFFFF' : colors.text, fontWeight: font.black }}>{title}</Text>
-      <Text style={{ color: active ? 'rgba(255,255,255,0.85)' : colors.textMuted, fontWeight: font.semibold, fontSize: fontSize.xs }}>{subtitle}</Text>
-    </Pressable>
-  );
-}
-function PayOption({ method, icon, active, onPress, colors }: any) {
-  return (
-    <Pressable onPress={onPress} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: radius.md, borderWidth: 2, borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.primarySoft : colors.card }}>
-      {icon}
-      <Text style={{ flex: 1, color: colors.text, fontWeight: font.bold }}>{PAYMENT_LABELS[method as PaymentMethod]}</Text>
-      <View style={{ width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: active ? colors.primary : colors.borderStrong, backgroundColor: active ? colors.primary : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
-        {active && <Check size={14} color="#FFFFFF" strokeWidth={3} />}
-      </View>
-    </Pressable>
-  );
-}
-function Chip({ label, active, onPress, colors, icon }: any) {
-  return (
-    <Pressable onPress={onPress} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.full, borderWidth: 2, borderColor: active ? colors.primaryDark : colors.border, backgroundColor: active ? colors.primary : colors.card }}>
-      {icon}
-      <Text style={{ color: active ? '#FFFFFF' : colors.text, fontWeight: font.bold, fontSize: fontSize.sm }}>{label}</Text>
-    </Pressable>
   );
 }

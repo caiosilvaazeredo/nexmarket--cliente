@@ -7,7 +7,7 @@ import {
   ViewStyle,
   RefreshControl,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColors } from '../../hooks/useColors';
 import { spacing, font, fontSize } from '../../lib/theme';
 
@@ -16,6 +16,7 @@ interface ScreenProps {
   scroll?: boolean;
   title?: string;
   subtitle?: string;
+  left?: React.ReactNode;
   right?: React.ReactNode;
   contentStyle?: StyleProp<ViewStyle>;
   edges?: ('top' | 'bottom' | 'left' | 'right')[];
@@ -28,6 +29,7 @@ export function Screen({
   scroll = true,
   title,
   subtitle,
+  left,
   right,
   contentStyle,
   edges = ['top'],
@@ -41,12 +43,13 @@ export function Screen({
       style={{
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        gap: spacing.sm,
         paddingHorizontal: spacing.lg,
         paddingTop: spacing.md,
         paddingBottom: spacing.sm,
       }}
     >
+      {left}
       <View style={{ flex: 1 }}>
         <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize['3xl'] }}>
           {title}

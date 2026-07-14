@@ -1,217 +1,218 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, Pressable, Image, FlatList, ScrollView } from 'react-native';
+import { View, Text, ScrollView, Image, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ChevronLeft, Tag, X, ShoppingCart, Truck, Check } from 'lucide-react-native';
+import { ArrowLeft, Minus, Plus, Trash2, Package, Tag, Check, X, Bike, ShoppingBag } from 'lucide-react-native';
 
+import { Button } from '../src/components/ui/Button';
+import { Input } from '../src/components/ui/Input';
 import { useColors } from '../src/hooks/useColors';
 import { font, fontSize, radius, spacing, shadow } from '../src/lib/theme';
 import { brl } from '../src/lib/format';
-import { Button } from '../src/components/ui/Button';
-import { Input } from '../src/components/ui/Input';
-import { EmptyState } from '../src/components/EmptyState';
-import { QuantityStepper } from '../src/components/QuantityStepper';
-import { ProductCard, toast } from '../src/components/ProductCard';
-import { useStore, selectCartSubtotal } from '../src/store/useStore';
-import { useCatalog } from '../src/hooks/useCatalog';
-import { increment, decrement, removeFromCart, setCoupon, computeTotals } from '../src/lib/cart';
-import { applyCoupon } from '../src/lib/coupons';
-import type { CartItem } from '../src/lib/types';
+import { useAppStore } from '../src/store/useAppStore';
+import { useCartStore } from '../src/store/useCartStore';
+import { lineTotal, effectiveUnitPrice, applyCoupon } from '../src/lib/promotions';
+import { computeDeliveryFee, meetsMinimum, freeShippingHint } from '../src/lib/storeHours';
+import { ProductCard } from '../src/components/ProductCard';
 
 export default function Cart() {
   const { colors } = useColors();
   const router = useRouter();
-  const cart = useStore((s) => s.cart);
-  const subtotal = useStore(selectCartSubtotal);
-  const supermarket = useStore((s) => s.supermarket);
-  const config = useStore((s) => s.deliveryConfig);
-  const couponCode = useStore((s) => s.couponCode);
-  const orders = useStore((s) => s.orders);
-  const { products } = useCatalog();
 
-  const [coupon, setCouponInput] = useState(couponCode || '');
+  const lines = useCartStore((s) => s.lines);
+  const couponCode = useCartStore((s) => s.couponCode);
+  const couponDiscount = useCartStore((s) => s.couponDiscount);
+  const { addItem, removeItem, setCoupon, clear } = useCartStore();
+
+  const products = useAppStore((s) => s.products);
+  const promotions = useAppStore((s) => s.promotions);
+  const deliveryConfig = useAppStore((s) => s.deliveryConfig);
+  const myOrders = useAppStore((s) => s.myOrders);
+  const brandName = useAppStore((s) => s.brand.name);
+
+  const [coupon, setCouponText] = useState(couponCode || '');
   const [couponMsg, setCouponMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [discount, setDiscount] = useState(0);
-  const [freeShip, setFreeShip] = useState(false);
-  const [applying, setApplying] = useState(false);
 
-  const isFirstOrder = orders.length === 0;
+  const subtotal = useMemo(() => lines.reduce((a, l) => a + lineTotal(l.product, l.quantity, promotions), 0), [lines, promotions]);
+  const deliveryFee = computeDeliveryFee(deliveryConfig);
+  const min = meetsMinimum(deliveryConfig, subtotal);
+  const discount = couponDiscount || 0;
+  const total = Math.max(0, subtotal + deliveryFee - discount);
+  const shipHint = freeShippingHint(deliveryConfig, subtotal);
 
-  const totals = useMemo(
-    () =>
-      computeTotals({
-        items: cart,
-        config,
-        method: 'delivery',
-        distanceKm: 2,
-        discount,
-        freeShippingCoupon: freeShip,
-        minOrder: supermarket?.minOrder,
-      }),
-    [cart, config, discount, freeShip, supermarket],
-  );
+  const crossSell = useMemo(() => {
+    const inCart = new Set(lines.map((l) => l.product.id));
+    return products.filter((p) => p.active !== false && !inCart.has(p.id)).slice(0, 8);
+  }, [products, lines]);
 
-  // Cross-sell ("Leve também") — cheap items not already in the cart.
-  const crossSell = useMemo(
-    () => products.filter((p) => !cart.some((c) => c.productId === p.id) && p.price <= 15).slice(0, 8),
-    [products, cart],
-  );
-
-  const handleApplyCoupon = async () => {
-    if (!coupon.trim() || !supermarket) return;
-    setApplying(true);
-    setCouponMsg(null);
-    const res = await applyCoupon(supermarket.id, coupon, subtotal, isFirstOrder);
-    setApplying(false);
-    if (res.ok) {
-      setDiscount(res.discount || 0);
-      setFreeShip(!!res.freeShipping);
-      setCoupon(coupon.trim().toUpperCase());
-      setCouponMsg({ ok: true, text: res.freeShipping ? 'Frete grátis aplicado! 🎉' : `Cupom aplicado: −${brl(res.discount)}` });
-    } else {
-      setDiscount(0);
-      setFreeShip(false);
-      setCoupon(null);
-      setCouponMsg({ ok: false, text: res.error || 'Cupom inválido.' });
-    }
+  const onApplyCoupon = () => {
+    const res = applyCoupon(coupon, subtotal, promotions, {
+      isFirstOrder: myOrders.length === 0,
+      deliveryFee,
+    });
+    setCouponMsg({ ok: res.ok, text: res.message });
+    if (res.ok) setCoupon(res.code, res.discount);
+    else setCoupon(null, 0);
   };
 
   const removeCoupon = () => {
-    setCoupon(null);
-    setCouponInput('');
-    setDiscount(0);
-    setFreeShip(false);
+    setCoupon(null, 0);
+    setCouponText('');
     setCouponMsg(null);
   };
 
-  if (cart.length === 0) {
+  const goCheckout = () => {
+    if (!min.ok) {
+      Alert.alert('Pedido mínimo', `Faltam ${brl(min.missing)} para atingir o pedido mínimo de ${brl(min.min)}.`);
+      return;
+    }
+    router.push('/checkout');
+  };
+
+  if (lines.length === 0) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
         <Header colors={colors} onBack={() => router.back()} title="Carrinho" />
-        <EmptyState
-          icon={<ShoppingCart size={40} color={colors.primary} />}
-          title="Seu carrinho está vazio"
-          subtitle="Adicione produtos e eles aparecem aqui."
-          action={<Button label="Explorar produtos" onPress={() => router.replace('/(tabs)')} style={{ marginTop: spacing.md }} />}
-        />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl }}>
+          <ShoppingBag size={56} color={colors.textSubtle} />
+          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>Seu carrinho está vazio</Text>
+          <Text style={{ color: colors.textMuted, textAlign: 'center' }}>Adicione produtos para continuar.</Text>
+          <Button label="Voltar às compras" onPress={() => router.replace('/(tabs)')} style={{ marginTop: 8 }} />
+        </View>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
-      <Header colors={colors} onBack={() => router.back()} title="Carrinho" subtitle={supermarket?.name} />
+      <Header
+        colors={colors}
+        onBack={() => router.back()}
+        title="Carrinho"
+        right={
+          <Pressable onPress={() => Alert.alert('Esvaziar carrinho', 'Remover todos os itens?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Esvaziar', style: 'destructive', onPress: clear }])} hitSlop={10}>
+            <Trash2 size={20} color={colors.danger} />
+          </Pressable>
+        }
+      />
 
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 200, gap: spacing.md }} showsVerticalScrollIndicator={false}>
         {/* Items */}
-        {cart.map((item) => (
-          <CartRow key={item.key} item={item} colors={colors} />
-        ))}
+        {lines.map((l) => {
+          const unit = effectiveUnitPrice(l.product, promotions);
+          return (
+            <View key={l.product.id} style={{ flexDirection: 'row', gap: spacing.md, backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 2, borderColor: colors.border, padding: spacing.md }}>
+              <View style={{ width: 60, height: 60, borderRadius: radius.md, backgroundColor: colors.cardMuted, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                {l.product.imageUrl ? <Image source={{ uri: l.product.imageUrl }} style={{ width: '100%', height: '100%' }} resizeMode="contain" /> : <Package size={26} color={colors.textSubtle} />}
+              </View>
+              <View style={{ flex: 1, justifyContent: 'space-between' }}>
+                <Text numberOfLines={2} style={{ color: colors.text, fontWeight: font.bold, fontSize: fontSize.sm }}>{l.product.name}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, borderWidth: 2, borderColor: colors.border, overflow: 'hidden' }}>
+                    <Pressable onPress={() => addItem(l.product, -1)} style={{ paddingHorizontal: 10, paddingVertical: 6 }}>
+                      <Minus size={16} color={colors.text} />
+                    </Pressable>
+                    <Text style={{ color: colors.text, fontWeight: font.black, minWidth: 24, textAlign: 'center' }}>{l.quantity}</Text>
+                    <Pressable onPress={() => addItem(l.product, 1)} style={{ paddingHorizontal: 10, paddingVertical: 6 }}>
+                      <Plus size={16} color={colors.text} />
+                    </Pressable>
+                  </View>
+                  <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.base }}>{brl(unit * l.quantity)}</Text>
+                </View>
+              </View>
+            </View>
+          );
+        })}
 
-        {/* Coupon (RF12) */}
-        <View style={{ gap: 8 }}>
+        {/* Coupon */}
+        <View style={{ backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 2, borderColor: colors.border, padding: spacing.md, gap: spacing.sm }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Tag size={18} color={colors.primary} />
+            <Text style={{ color: colors.text, fontWeight: font.black }}>Cupom de desconto</Text>
+          </View>
           {couponCode ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.primarySoft, borderRadius: radius.md, padding: 14 }}>
-              <Tag size={20} color={colors.primaryDark} />
-              <Text style={{ flex: 1, color: colors.primaryDark, fontWeight: font.black }}>{couponCode}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.primarySoft, borderRadius: radius.md, padding: spacing.md }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Check size={18} color={colors.primaryDark} />
+                <Text style={{ color: colors.primaryDark, fontWeight: font.black }}>{couponCode} • -{brl(discount)}</Text>
+              </View>
               <Pressable onPress={removeCoupon} hitSlop={8}><X size={18} color={colors.primaryDark} /></Pressable>
             </View>
           ) : (
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Input containerStyle={{ flex: 1 }} placeholder="Código promocional" autoCapitalize="characters" value={coupon} onChangeText={setCouponInput} icon={<Tag size={20} color={colors.textSubtle} />} />
-              <Button label="Aplicar" variant="secondary" fullWidth={false} loading={applying} onPress={handleApplyCoupon} />
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <View style={{ flex: 1 }}>
+                <Input placeholder="Digite o cupom" autoCapitalize="characters" value={coupon} onChangeText={setCouponText} />
+              </View>
+              <Button label="Aplicar" fullWidth={false} onPress={onApplyCoupon} />
             </View>
           )}
-          {couponMsg ? (
+          {couponMsg && !couponCode ? (
             <Text style={{ color: couponMsg.ok ? colors.primaryDark : colors.danger, fontWeight: font.semibold, fontSize: fontSize.sm }}>{couponMsg.text}</Text>
           ) : null}
         </View>
 
-        {/* Free-shipping / min-order hints (RF13) */}
-        {totals.remainingForFreeShipping > 0 && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.blueSoft, borderRadius: radius.md, padding: 14 }}>
-            <Truck size={20} color={colors.blue} />
-            <Text style={{ flex: 1, color: colors.blue, fontWeight: font.semibold, fontSize: fontSize.sm }}>
-              Faltam {brl(totals.remainingForFreeShipping)} para <Text style={{ fontWeight: font.black }}>frete grátis</Text>!
-            </Text>
+        {/* Free shipping hint / minimum */}
+        {shipHint ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.blueSoft, borderRadius: radius.md, padding: spacing.md }}>
+            <Bike size={18} color={colors.blue} />
+            <Text style={{ color: colors.blue, fontWeight: font.bold, flex: 1 }}>{shipHint}</Text>
           </View>
-        )}
-        {totals.remainingForMinOrder > 0 && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.amberSoft, borderRadius: radius.md, padding: 14 }}>
-            <Text style={{ flex: 1, color: '#92400E', fontWeight: font.semibold, fontSize: fontSize.sm }}>
-              Pedido mínimo {brl(supermarket?.minOrder)} — faltam {brl(totals.remainingForMinOrder)}.
-            </Text>
-          </View>
-        )}
+        ) : null}
 
-        {/* Cross-sell */}
-        {crossSell.length > 0 && (
-          <View style={{ gap: spacing.sm, marginTop: spacing.sm }}>
-            <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg }}>Leve também</Text>
-            <FlatList horizontal data={crossSell} keyExtractor={(p) => p.id} showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.md }} renderItem={({ item }) => <View style={{ width: 140 }}><ProductCard product={item} /></View>} />
+        {/* Cross-sell to reach minimum / boost basket */}
+        {crossSell.length > 0 ? (
+          <View style={{ gap: spacing.sm }}>
+            <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.base }}>
+              {!min.ok ? 'Leve também para fechar o pedido' : 'Leve também'}
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.md }}>
+              {crossSell.map((p) => (
+                <View key={p.id} style={{ width: 140 }}>
+                  <ProductCard product={p} onPress={() => router.push(`/product/${p.id}`)} />
+                </View>
+              ))}
+            </ScrollView>
           </View>
-        )}
+        ) : null}
       </ScrollView>
 
-      {/* Sticky summary */}
-      <View style={[{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.card, borderTopWidth: 2, borderColor: colors.border, padding: spacing.lg, gap: spacing.sm }, shadow.raised]}>
-        <SummaryLine label="Subtotal" value={brl(totals.subtotal)} colors={colors} />
-        {totals.discount > 0 && <SummaryLine label="Desconto" value={`− ${brl(totals.discount)}`} colors={colors} accent={colors.primaryDark} />}
-        <SummaryLine label="Frete estimado" value={totals.freeShipping ? 'Grátis' : brl(totals.deliveryFee)} colors={colors} accent={totals.freeShipping ? colors.primaryDark : undefined} />
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
-          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.lg }}>Total</Text>
-          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.xl }}>{brl(totals.total)}</Text>
+      {/* Summary + CTA */}
+      <View style={[{ padding: spacing.lg, backgroundColor: colors.card, borderTopWidth: 2, borderTopColor: colors.border, gap: spacing.sm }, shadow.raised]}>
+        <Row label="Subtotal" value={brl(subtotal)} colors={colors} />
+        {discount > 0 ? <Row label="Desconto" value={`- ${brl(discount)}`} colors={colors} positive /> : null}
+        <Row label="Frete" value={deliveryFee > 0 ? brl(deliveryFee) : 'Grátis'} colors={colors} />
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
+          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize.base }}>Total</Text>
+          <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize['2xl'] }}>{brl(total)}</Text>
         </View>
-        <Button
-          label="Ir para o pagamento"
-          size="lg"
-          disabled={totals.remainingForMinOrder > 0}
-          onPress={() => router.push('/checkout')}
-        />
+        {!min.ok ? (
+          <Text style={{ color: colors.danger, fontWeight: font.bold, fontSize: fontSize.sm, textAlign: 'center' }}>
+            Faltam {brl(min.missing)} para o pedido mínimo de {brl(min.min)}
+          </Text>
+        ) : null}
+        <Button label="Ir para o pagamento" size="lg" disabled={!min.ok} onPress={goCheckout} />
       </View>
     </SafeAreaView>
   );
 }
 
-function CartRow({ item, colors }: { item: CartItem; colors: any }) {
+function Header({ colors, onBack, title, right }: { colors: any; onBack: () => void; title: string; right?: React.ReactNode }) {
   return (
-    <View style={{ flexDirection: 'row', gap: 12, backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 2, borderColor: colors.border, padding: spacing.sm }}>
-      <View style={{ width: 64, height: 64, borderRadius: radius.md, backgroundColor: colors.cardMuted, overflow: 'hidden' }}>
-        {item.imageUrl ? <Image source={{ uri: item.imageUrl }} style={{ width: '100%', height: '100%' }} /> : null}
-      </View>
-      <View style={{ flex: 1, justifyContent: 'space-between' }}>
-        <View>
-          <Text style={{ color: colors.text, fontWeight: font.bold }} numberOfLines={2}>{item.name}</Text>
-          {item.options?.length ? <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, fontWeight: font.medium }}>{item.options.map((o) => o.choiceName).join(', ')}</Text> : null}
-          <Text style={{ color: colors.text, fontWeight: font.black, marginTop: 2 }}>{brl(item.price)}</Text>
-        </View>
-      </View>
-      <View style={{ justifyContent: 'center' }}>
-        <QuantityStepper value={item.quantity} size="sm" max={item.stock} onInc={() => { const r = increment(item.key); if (!r.ok) toast('Estoque máximo atingido.'); }} onDec={() => decrement(item.key)} />
-      </View>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
+      <Pressable onPress={onBack} hitSlop={10} style={{ padding: 6 }}>
+        <ArrowLeft size={24} color={colors.text} />
+      </Pressable>
+      <Text style={{ flex: 1, color: colors.text, fontWeight: font.black, fontSize: fontSize['2xl'] }}>{title}</Text>
+      {right}
     </View>
   );
 }
 
-function SummaryLine({ label, value, colors, accent }: any) {
+function Row({ label, value, colors, positive }: { label: string; value: string; colors: any; positive?: boolean }) {
   return (
     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
       <Text style={{ color: colors.textMuted, fontWeight: font.medium }}>{label}</Text>
-      <Text style={{ color: accent || colors.text, fontWeight: font.bold }}>{value}</Text>
-    </View>
-  );
-}
-
-function Header({ colors, onBack, title, subtitle }: any) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm }}>
-      <Pressable onPress={onBack} style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.card, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
-        <ChevronLeft size={24} color={colors.text} />
-      </Pressable>
-      <View>
-        <Text style={{ color: colors.text, fontWeight: font.black, fontSize: fontSize['2xl'] }}>{title}</Text>
-        {subtitle ? <Text style={{ color: colors.textMuted, fontWeight: font.medium, fontSize: fontSize.sm }}>{subtitle}</Text> : null}
-      </View>
+      <Text style={{ color: positive ? colors.primaryDark : colors.textMuted, fontWeight: font.bold }}>{value}</Text>
     </View>
   );
 }

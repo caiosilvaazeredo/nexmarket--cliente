@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useColors } from '../../hooks/useColors';
 import { radius, font, fontSize } from '../../lib/theme';
+import { tapHaptic } from '../../lib/notifications';
 
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost';
 type Size = 'sm' | 'default' | 'lg';
@@ -24,6 +25,7 @@ interface ButtonProps {
   loading?: boolean;
   icon?: React.ReactNode;
   fullWidth?: boolean;
+  haptic?: boolean;
   style?: ViewStyle | ViewStyle[];
   textStyle?: TextStyle;
 }
@@ -42,6 +44,7 @@ export function Button({
   loading,
   icon,
   fullWidth = true,
+  haptic = true,
   style,
   textStyle,
 }: ButtonProps) {
@@ -49,7 +52,7 @@ export function Button({
 
   const palettes: Record<Variant, { bg: string; border: string; text: string }> = {
     primary: { bg: colors.primary, border: colors.primaryDark, text: '#FFFFFF' },
-    secondary: { bg: colors.card, border: colors.border, text: colors.textMuted },
+    secondary: { bg: colors.card, border: colors.border, text: colors.text },
     danger: { bg: colors.danger, border: colors.dangerDark, text: '#FFFFFF' },
     ghost: { bg: 'transparent', border: 'transparent', text: colors.textMuted },
   };
@@ -64,9 +67,14 @@ export function Button({
 
   const isDisabled = disabled || loading;
 
+  const handlePress = () => {
+    if (haptic && variant !== 'ghost') tapHaptic();
+    onPress?.();
+  };
+
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handlePress}
       disabled={isDisabled}
       style={({ pressed }) => [
         styles.base,
@@ -75,6 +83,7 @@ export function Button({
           borderColor: p.border,
           borderBottomWidth: variant === 'ghost' ? 0 : pressed ? 1 : 4,
           borderWidth: variant === 'secondary' ? 2 : 0,
+          borderBottomColor: p.border,
           height: heights[size],
           borderRadius: radius.lg,
           opacity: isDisabled ? 0.5 : 1,
