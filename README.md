@@ -1,118 +1,88 @@
-# 🛒 Nexmarket Cliente
-
-> 📘 **[MANUAL.md](./MANUAL.md)** — como rodar, buildar (EAS) e publicar o app, e como ativar o **pagamento real via Stripe** (cartão + PIX).
+# 🛒 Nexmarket Cliente (Flutter)
 
 App do **cliente** da plataforma **Nexmarket**, no estilo *iFood / Uber Eats*,
-**totalmente integrado** ao painel da loja (`nexmarket--loja`) e ao app do
-entregador (`nexmarket--entregador`): os três compartilham o **mesmo projeto
-Firebase e o mesmo banco Firestore** (RNF08).
+**reescrito em Flutter** e totalmente integrado ao painel da loja
+(`nexmarket--loja`) e ao app do entregador (`nexmarket--entregador`): os três
+compartilham o **mesmo projeto Firebase e o mesmo banco Firestore (nomeado)**.
 
-Construído na **mesma stack do app do entregador** — **Expo SDK 52 / React
-Native 0.76 + TypeScript + expo-router + Firebase 11 + Zustand** — reaproveitando
-a identidade visual “Duolingo” (verde `#58CC02`, botões 3D, tipografia forte) e o
-kit de UI. A marca é **white-label dinâmica**: cada supermercado re-skina o app
-(cor, nome e logo) pelo **GondolaAppBuilder** do painel, sem rebuild (RNF01).
+Identidade visual "Duolingo" (verde `#58CC02`, botões grandes, tipografia
+forte) com **white-label dinâmico**: a cor, o nome e o logo vêm do
+`storefront/appConfig` publicado pelo GondolaAppBuilder do painel — sem
+rebuild.
 
 ---
 
 ## 🚀 Como rodar
 
+Pré-requisitos: **Flutter 3.32+** (`flutter doctor` sem erros) e um emulador
+Android ou dispositivo físico.
+
 ```bash
-npm install
-npm start        # Expo dev server  (a, i, w para Android/iOS/web)
-npm run lint     # tsc --noEmit (checagem de tipos)
+flutter pub get
+flutter run          # escolha o dispositivo (a para Android)
 ```
 
-O Firebase já vem configurado em `firebase-config.json` (mesmo projeto da loja e
-do entregador — comitado de propósito, como nos outros repos). Para o mapa de
-rastreio e o login social, preencha `.env` a partir de `.env.example`
-(`EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`, `EXPO_PUBLIC_GOOGLE_*_CLIENT_ID`) e espelhe
-em `app.json`.
+Não precisa de `google-services.json`: a configuração do Firebase é passada em
+código (`lib/firebase_options.dart`), com os mesmos valores dos outros repos,
+incluindo o **banco Firestore nomeado** — o app conecta direto no banco
+compartilhado da plataforma.
+
+```bash
+flutter analyze      # checagem estática (sem erros)
+flutter build apk    # build de produção Android
+flutter build ipa    # build iOS (requer macOS/Xcode)
+```
 
 ---
 
-## 🗺️ Jornada do cliente (fluxo feliz + alternativos)
+## 🗺️ Jornada do cliente
 
 | Fase | Implementação |
 |---|---|
-| **Descoberta / onboarding** | `app/store-picker.tsx` (escolha de loja, GPS/CEP, fora de área → retirada), branding aplicado via `whitelabel.ts`. Navegação livre **sem login** (guest); o login só é exigido no checkout. |
-| **Navegação / gôndolas** | `app/(tabs)/index.tsx` (vitrine), `app/category/[id].tsx`, `app/(tabs)/search.tsx` (fuzzy + filtros), `app/product/[id].tsx`. Esgotado → “Avise-me”; limite de estoque → trava + háptico; carrinho persiste offline. |
-| **Carrinho / checkout** | `app/cart.tsx` (cupom, frete, mínimo, cross-sell “leve também”) → `app/checkout.tsx` (≤3 etapas; entrega/retirada, pagamento, agendamento, revisão). |
-| **Triagem / acompanhamento** | `app/order/[id].tsx` (status em tempo real, mapa do entregador, **revisão de substituição** com estorno, expiração de PIX + “tentar de novo”, cancelamento). Push a cada mudança de status. |
-| **Pós-venda** | Avaliação 1–5 ★ + tags de problema + foto (nota baixa); **repetir pedido** em 1 toque revalidando estoque/preço. |
-
----
-
-## ✅ Mapa dos requisitos
-
-| RF | Funcionalidade | Onde |
-|---|---|---|
-| RF01 | Login: e-mail, Google, Apple, Telefone (SMS) + visitante | `app/(auth)/*`, `src/lib/firebase.ts`, `src/hooks/useGoogleAuth.ts` |
-| RF02 | Recuperação de senha | `app/(auth)/recovery.tsx` |
-| RF03 | Catálogo de endereços (Casa, Trabalho…) | `app/addresses.tsx`, `app/address-edit.tsx`, `src/lib/customers.ts` |
-| RF04 | Auto-completar/validar por CEP ou GPS | `src/lib/cep.ts` (ViaCEP), `src/lib/location.ts` |
-| RF05 | Vitrine: gôndolas, categorias, destaques | `app/(tabs)/index.tsx`, `app/category/[id].tsx` |
-| RF06 | Busca global com *fuzzy search* | `src/lib/search.ts`, `app/(tabs)/search.tsx` |
-| RF07 | Filtros (categoria, marca, preço, diet/vegano, promoção) | `app/(tabs)/search.tsx`, `src/lib/search.ts` |
-| RF08 | Detalhe do produto (foto, unidade, descrição, tabela nutricional) | `app/product/[id].tsx` |
-| RF09 | Preço “de/por” + selo “% OFF” | `src/lib/promotions.ts`, `ProductCard`, `product/[id]` |
-| RF10 | Adicionar/remover/alterar quantidade | `src/store/useCartStore.ts`, `ProductCard` |
-| RF11 | Subtotal dinâmico no rodapé | `src/components/CartBar.tsx`, `app/cart.tsx` |
-| RF12 | Cupom de desconto | `src/lib/promotions.ts (applyCoupon)`, `app/cart.tsx` |
-| RF13 | Frete automático + alerta de frete grátis / mínimo | `src/lib/storeHours.ts`, `app/cart.tsx` |
-| RF14 | Delivery ou Retirada na loja | `app/checkout.tsx` |
-| RF15 | Pagamento: PIX, cartão online/na entrega, dinheiro, vale | `app/checkout.tsx`, `src/lib/payments.ts` |
-| RF16 | Agendamento de entrega | `app/checkout.tsx` |
-| RF17 | Revisão final antes de confirmar | `app/checkout.tsx` (seção “Resumo”) |
-| RF18 | Histórico de pedidos | `app/(tabs)/orders.tsx`, `src/lib/orders.ts` |
-| RF19 | Repetir pedido (1 toque) | `src/lib/reorder.ts`, `src/hooks/useReorder.ts` |
-| RF20 | Status em tempo real | `app/order/[id].tsx`, `src/components/OrderStatusTracker.tsx` |
-| RF21 | Rastrear entregador no mapa | `app/order/[id].tsx`, `src/components/MapPanel.tsx` |
-| RF22 | Notificações push a cada mudança de status | `app/_layout.tsx`, `src/lib/notifications.ts` |
-| RF23 | Avaliação 1–5 ★ + comentário + tags/foto | `app/order/[id].tsx`, `src/components/StarRating.tsx` |
-| RF24 | FAQ/Suporte + chat + WhatsApp | `app/support.tsx`, `app/chat/[id].tsx`, `src/lib/chat.ts` |
-
-| RNF | Requisito | Como atendemos |
-|---|---|---|
-| RNF01 | White-label dinâmico | `src/lib/whitelabel.ts` lê `storefront/appConfig` (accentColor/storeName/fontFamily) + `themeColor`; aplicado em `useColors`. |
-| RNF02 | App visual, botões “Adicionar” grandes | `src/components/ProductCard.tsx`, imagens grandes, gôndolas em carrossel. |
-| RNF03 | Checkout ≤ 3 etapas | `app/checkout.tsx` em tela única para cliente logado. |
-| RNF04 | Abertura/busca < 2s | Listeners em cache + busca em memória; imagens lazy. |
-| RNF05 | Imagens otimizadas/cacheadas | `Image` nativo com cache; upload comprimido em `src/lib/images.ts`. |
-| RNF06 | Tempo real (estoque/preço) | `onSnapshot` em todo o catálogo (`src/lib/catalog.ts`, `_layout`). |
-| RNF07 | Stack nativa | Expo / React Native (igual ao entregador). |
-| RNF08 | Firebase do Manager | `firebase-config.json` compartilhado; banco Firestore nomeado. |
-| RNF09 | APIs de mapa | `react-native-maps` + Google Maps; geocoding via `expo-location`. |
-| RNF10 | Sem dados de cartão no banco | `src/lib/payments.ts (tokenizeCard)` — só token; PAN/CVV nunca persistidos. |
-| RNF11 | Regras de segurança | Cliente não edita catálogo; cria pedido só com o **próprio uid**; lê só os **próprios pedidos**. Regras em `nexmarket--loja/firestore.rules`. |
-| RNF12 | LGPD — exclusão de conta/dados | `app/(tabs)/profile.tsx` → `deleteCustomerData` + `deleteCurrentAuthUser`. |
-
----
-
-## 🔌 Integração com o banco compartilhado
-
-Leitura (tempo real) de `/supermarkets/{id}`, `…/gondolas`, `…/products`,
-`…/promotions`, `…/deliveryConfig/main`, `…/settings/storeInfo`,
-`…/storefront/{appConfig,config}` e `/drivers/{uid}` (rastreio).
-
-Escrita **somente** em `/customers/{uid}` (perfil/endereços/favoritos) e em
-`/supermarkets/{id}/orders/{id}` (criação do próprio pedido + respostas de
-substituição/avaliação/cancelamento/pagamento, sempre dentro da *allowlist* das
-regras). O ciclo de status (`pending → picking → ready → delivered`) e o
-`deliveryStatus` do entregador são consumidos exatamente como a loja/entregador
-os escrevem.
-
-> As **Firestore Security Rules** vivem no repositório `nexmarket--loja`
-> (`firestore.rules`) e foram estendidas neste trabalho com a coleção
-> `/customers/{uid}` e o endurecimento de leitura/escrita de pedidos (RNF11).
+| **Descoberta** | `lib/screens/store_picker.dart` — escolha da loja; navegação **livre sem login** (o login só é exigido no checkout). |
+| **Vitrine / gôndolas** | `home_screen.dart` (carrosséis por gôndola), `category_screen.dart`, `search_screen.dart` (busca tolerante + filtros), `product_screen.dart` (descrição, tabela nutricional, tags). |
+| **Carrinho / checkout** | `cart_screen.dart` (cupom, frete, pedido mínimo) → `checkout_screen.dart` (entrega/retirada, pagamento, agendamento, gorjeta, revisão — tela única). |
+| **Acompanhamento** | `order_screen.dart` — status em tempo real, rastreio do entregador, PIN de entrega, **revisão de substituições** com estorno, cancelamento, chat. |
+| **Pós-venda** | Avaliação 1–5★ + tags de problema; **repetir pedido** em 1 toque revalidando estoque/preço. |
 
 ## 🧱 Arquitetura
 
-- **Estado:** `src/store/useAppStore.ts` (auth, cliente, catálogo, marca,
-  pedidos) e `src/store/useCartStore.ts` (carrinho persistido em AsyncStorage,
-  escopado por loja).
-- **Dados:** `src/lib/{catalog,orders,customers,promotions,chat,storeHours,
-  cep,payments,reorder,search}.ts`.
-- **UI:** `src/components/ui/*` (Screen/Button/Card/Input/Badge) + componentes
-  de feature (ProductCard, CartBar, OrderStatusTracker, MapPanel, StarRating,
-  EmptyState).
+```
+lib/
+  firebase_options.dart      # config Firebase + id do banco nomeado
+  models.dart                # schema Firestore compartilhado
+  theme.dart                 # tema white-label + formatação R$
+  services/
+    fire.dart                # init Firebase / Firestore nomeado
+    catalog_repo.dart        # supermercados, gôndolas, produtos, promos (tempo real)
+    pricing.dart             # motor de preços idêntico ao da loja + cupons
+    orders_repo.dart         # criar pedido, substituições, avaliação, cancelamento
+    customers_repo.dart      # perfil /customers/{uid}, endereços, ViaCEP, LGPD
+    chat_repo.dart           # chat do pedido
+  state/
+    app_state.dart           # auth + loja + catálogo + pedidos (Provider)
+    cart_state.dart          # carrinho persistido offline por loja
+  screens/                   # store_picker, auth, tabs, cart, checkout, order…
+  widgets/common.dart        # ProductCard, CartBar, StarRating, EmptyState…
+```
+
+- **Preços**: `services/pricing.dart` replica o motor do storefront web
+  (promo de produto, regras por produto/subcategoria/categoria, "leve X por
+  Y", cupons com mínimo/limite/primeira compra) — os apps calculam valores
+  idênticos ao painel.
+- **Pedidos**: o payload de `placeOrder` é o mesmo do app Expo anterior
+  (`deliveryStatus: awaiting_driver`, `deliveryPin`, gorjeta etc.), então
+  loja e entregador continuam funcionando sem nenhuma mudança.
+- **Carrinho** persiste offline via `shared_preferences`, escopado por loja,
+  com trava de limite de estoque.
+
+## ⚙️ Observações
+
+- **Mapa**: o rastreio mostra o entregador (nome, veículo, avaliação) e abre o
+  Google Maps com a posição ao vivo em 1 toque. Para mapa embutido, adicione
+  `google_maps_flutter` + API key.
+- **Login social (Google/Apple/SMS)**: a base usa e-mail/senha; os pacotes
+  `google_sign_in` / `sign_in_with_apple` podem ser plugados em
+  `lib/screens/auth.dart`.
+- **Security Rules**: continuam no repositório `nexmarket--loja`
+  (`firestore.rules`).
