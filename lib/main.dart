@@ -11,9 +11,57 @@ import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Fire.init();
-  await initializeDateFormatting('pt_BR');
-  runApp(const NexmarketClienteApp());
+  try {
+    // Timeout: em rede ruim o carregamento do SDK web pode pendurar sem
+    // rejeitar — cai na tela de retry em vez de tela branca.
+    await Fire.init().timeout(const Duration(seconds: 15));
+    await initializeDateFormatting('pt_BR');
+    runApp(const NexmarketClienteApp());
+  } catch (e) {
+    // Sem rede/Firebase indisponível: tela de erro com retry em vez de
+    // tela branca (importante no web).
+    runApp(StartupErrorApp(error: '$e', retry: main));
+  }
+}
+
+class StartupErrorApp extends StatelessWidget {
+  final String error;
+  final Future<void> Function() retry;
+  const StartupErrorApp({super.key, required this.error, required this.retry});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.cloud_off, size: 64, color: Color(0xFF58CC02)),
+                const SizedBox(height: 16),
+                const Text('Sem conexão com o servidor',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 8),
+                const Text('Verifique sua internet e tente novamente.',
+                    textAlign: TextAlign.center),
+                const SizedBox(height: 20),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF58CC02)),
+                  onPressed: retry,
+                  child: const Text('Tentar novamente'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class NexmarketClienteApp extends StatelessWidget {
