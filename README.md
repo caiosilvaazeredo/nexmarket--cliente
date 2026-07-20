@@ -86,3 +86,29 @@ lib/
   `lib/screens/auth.dart`.
 - **Security Rules**: continuam no repositório `nexmarket--loja`
   (`firestore.rules`).
+
+---
+
+## 🧪 Testes e builds
+
+```bash
+flutter test         # 34 testes: preços/cupons, carrinho, modelos e a
+                     # jornada completa do pedido (Firestore fake em memória)
+flutter analyze      # 0 issues
+flutter build apk    # APK release Android
+flutter build web    # versão para navegador (teste com: python3 -m http.server -d build/web)
+```
+
+O build web usa **CanvasKit e fontes auto-hospedados** (copie
+`$FLUTTER_SDK/bin/cache/flutter_web_sdk/canvaskit` para `build/web/canvaskit`
+se fizer deploy — ou rode o script abaixo) e o app mostra uma tela de
+"tentar novamente" quando não há conexão, em vez de tela branca.
+
+```bash
+flutter build web --release && cp -r "$(dirname "$(which flutter)")/cache/flutter_web_sdk/canvaskit" build/web/canvaskit
+```
+
+Os testes de jornada (`test/journey_test.dart`) simulam as escritas do painel
+da loja e do entregador exatamente como os outros sistemas fazem, validando o
+contrato do banco compartilhado: criação do pedido, separação, substituições
+com estorno, entrega com PIN, avaliação e cancelamento.
