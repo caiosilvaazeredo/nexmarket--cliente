@@ -61,4 +61,26 @@ class CatalogRepo {
       }
     });
   }
+
+  /* --------- Leituras pontuais para a lista de mercados --------- */
+
+  /// Horários/endereço de uma loja (usado no seletor de mercados).
+  static Future<StoreInfo?> storeInfoOnce(String smId) async {
+    try {
+      final d = await Fire.db.doc('supermarkets/$smId/settings/storeInfo').get();
+      return d.exists ? StoreInfo.fromMap(d.data()!) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Política de entrega de uma loja (frete/mínimo) para filtros e selos.
+  static Future<DeliveryConfig?> deliveryConfigOnce(String smId) async {
+    try {
+      final d = await Fire.db.doc('supermarkets/$smId/deliveryConfig/main').get();
+      return d.exists ? DeliveryConfig.fromMap(d.data()!) : null;
+    } catch (_) {
+      return null;
+    }
+  }
 }
