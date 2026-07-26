@@ -33,6 +33,8 @@ class AppState extends ChangeNotifier {
   StreamSubscription? _ordersSub;
 
   AppState() {
+    // Em teste (Firestore fake) não há FirebaseAuth real para assinar.
+    if (Fire.isTestMode) return;
     Fire.auth.authStateChanges().listen((u) async {
       user = u;
       _profileSub?.cancel();
@@ -86,12 +88,16 @@ class AppState extends ChangeNotifier {
       s.cancel();
     }
     _subs.clear();
+    // Zera o catálogo e a marca da loja anterior para não vazar nome/cor
+    // antigos enquanto os novos snapshots não chegam.
+    supermarket = null;
     gondolas = [];
     products = [];
     promotions = [];
     appConfig = null;
     deliveryConfig = null;
     storeInfo = null;
+    notifyListeners();
 
     _subs.addAll([
       CatalogRepo.supermarket(smId).listen((s) {

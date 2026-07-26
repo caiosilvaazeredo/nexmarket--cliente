@@ -38,5 +38,9 @@ class Fire {
   @visibleForTesting
   static set testUid(String? uid) => _testUid = uid;
 
+  /// True quando um Firestore fake foi injetado — o estado global usa isso
+  /// para não assinar o FirebaseAuth real durante os testes.
+  static bool get isTestMode => _testMode;
+
   static String? get uid => _testMode ? _testUid : auth.currentUser?.uid;
 }

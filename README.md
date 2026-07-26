@@ -39,7 +39,7 @@ flutter build ipa    # build iOS (requer macOS/Xcode)
 
 | Fase | Implementação |
 |---|---|
-| **Descoberta** | `lib/screens/store_picker.dart` — escolha da loja; navegação **livre sem login** (o login só é exigido no checkout). |
+| **Descoberta** | `lib/screens/store_picker.dart` — escolha da loja com **busca por nome e filtros** (abertos agora, frete grátis) e **ordenação por distância** (GPS), menor frete ou A–Z; cada card mostra status, distância e frete. Navegação **livre sem login** (o login só é exigido no checkout). |
 | **Vitrine / gôndolas** | `home_screen.dart` (carrosséis por gôndola), `category_screen.dart`, `search_screen.dart` (busca tolerante + filtros), `product_screen.dart` (descrição, tabela nutricional, tags). |
 | **Carrinho / checkout** | `cart_screen.dart` (cupom, frete, pedido mínimo) → `checkout_screen.dart` (entrega/retirada, pagamento, agendamento, gorjeta, revisão — tela única). |
 | **Acompanhamento** | `order_screen.dart` — status em tempo real, rastreio do entregador, PIN de entrega, **revisão de substituições** com estorno, cancelamento, chat. |
