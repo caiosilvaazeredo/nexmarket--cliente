@@ -32,23 +32,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _address ??= context.read<AppState>().profile?.defaultAddress;
+    final profile = context.read<AppState>().profile;
+    _address ??= profile?.defaultAddress;
+    // Já vem marcada a forma de pagamento preferida do perfil.
+    _payment ??= profile?.defaultPaymentMethod?.isNotEmpty == true
+        ? profile!.defaultPaymentMethod
+        : null;
   }
 
+  /// Opções de pagamento: cartões salvos do cliente primeiro, depois as
+  /// formas que a loja aceita.
   List<(String, String)> _paymentOptions(AppState app) {
     final pm = app.storeInfo?.paymentMethods ?? const {};
     bool on(String key, {bool fallback = true}) =>
         pm.isEmpty ? fallback : pm[key] == true;
-    final list = <(String, String)>[
+    return <(String, String)>[
+      if (on('creditCardOnline'))
+        for (final card in app.profile?.cards ?? const <SavedCard>[])
+          if (!card.isExpired)
+            ('card:${card.id}',
+                card.nickname.isNotEmpty ? '${card.nickname} (${card.label})' : card.label),
       if (on('pix')) ('pix', 'PIX'),
-      if (on('creditCardOnline')) ('card_online', 'Cartão (online)'),
+      if (on('creditCardOnline')) ('card_online', 'Outro cartão (online)'),
       if (on('creditCardDelivery') || on('debitCardDelivery'))
         ('card_delivery', 'Cartão na entrega'),
       ('cash_delivery', 'Dinheiro'),
       if ((pm['vouchers'] as List?)?.isNotEmpty == true)
         ('voucher_delivery', 'Vale-alimentação'),
     ];
-    return list;
   }
 
   Future<void> _placeOrder() async {
@@ -93,6 +104,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }).toList();
 
       final profile = app.profile;
+      // Cartão salvo vira `card_online` + os dados exibíveis do cartão, que
+      // é o que a loja e o painel entendem (RNF10: sem número/CVV).
+      final selectedCard = _payment!.startsWith('card:')
+          ? profile?.cardById(_payment!.substring(5))
+          : null;
       final orderId = await OrdersRepo.placeOrder(
         supermarketId: app.supermarketId!,
         items: items,
@@ -102,7 +118,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         total: total,
         couponCode: cart.couponCode ?? '',
         fulfillment: _fulfillment,
-        paymentMethod: _payment!,
+        paymentMethod: selectedCard != null ? 'card_online' : _payment!,
+        paymentCard: selectedCard == null
+            ? null
+            : {
+                'brand': selectedCard.brand,
+                'last4': selectedCard.last4,
+                'isCredit': selectedCard.isCredit,
+              },
         customerName: profile?.name ?? app.user?.displayName ?? '',
         customerPhone: profile?.phone ?? '',
         deliveryAddress: _fulfillment == 'delivery' ? _address!.toMap() : null,

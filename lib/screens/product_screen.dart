@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../services/customers_repo.dart';
 import '../services/pricing.dart';
 import '../state/app_state.dart';
 import '../state/cart_state.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'auth.dart';
 import 'cart_screen.dart';
 
 /// Detalhe do produto: foto, unidade, descrição e tabela nutricional (RF08),
@@ -35,8 +37,29 @@ class ProductScreen extends StatelessWidget {
     final qty = cart.quantityOf(product.id);
     final stock = product.availableStock;
 
+    final profile = app.profile;
+    final isFavorite = profile?.isFavorite(product.id) ?? false;
+
     return Scaffold(
-      appBar: AppBar(title: Text(product.name, maxLines: 1, overflow: TextOverflow.ellipsis)),
+      appBar: AppBar(
+        title: Text(product.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        actions: [
+          IconButton(
+            tooltip: isFavorite ? 'Remover dos favoritos' : 'Favoritar',
+            icon: Icon(isFavorite ? Icons.favorite : Icons.favorite_border,
+                color: isFavorite ? Colors.redAccent : null),
+            onPressed: () async {
+              if (profile == null) {
+                final ok = await ensureLoggedIn(context);
+                if (!ok) return;
+                return;
+              }
+              await CustomersRepo.toggleFavorite(
+                  profile.uid, profile.favorites, product.id);
+            },
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.only(bottom: 120),
         children: [
