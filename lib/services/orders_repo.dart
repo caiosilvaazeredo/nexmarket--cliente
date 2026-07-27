@@ -89,6 +89,8 @@ class OrdersRepo {
     double? changeFor,
     String notes = '',
     double tip = 0,
+    /// Bandeira/últimos 4 do cartão escolhido — nunca o número (RNF10).
+    Map<String, dynamic>? paymentCard,
   }) async {
     final uid = Fire.uid;
     if (uid == null) throw Exception('É necessário estar logado para finalizar o pedido.');
@@ -122,6 +124,7 @@ class OrdersRepo {
       'paymentStatus': 'pending',
       'customerName': customerName,
       'customerPhone': customerPhone,
+      if (paymentCard != null) 'paymentCard': paymentCard,
       'notes': notes,
       'scheduledFor': scheduledFor,
       'changeFor': changeFor,

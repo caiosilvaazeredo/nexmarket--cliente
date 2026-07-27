@@ -44,6 +44,7 @@ flutter build ipa    # build iOS (requer macOS/Xcode)
 | **Carrinho / checkout** | `cart_screen.dart` (cupom, frete, pedido mínimo) → `checkout_screen.dart` (entrega/retirada, pagamento, agendamento, gorjeta, revisão — tela única). |
 | **Acompanhamento** | `order_screen.dart` — status em tempo real, rastreio do entregador, PIN de entrega, **revisão de substituições** com estorno, cancelamento, chat. |
 | **Pós-venda** | Avaliação 1–5★ + tags de problema; **repetir pedido** em 1 toque revalidando estoque/preço. |
+| **Perfil** | `profile_screen.dart` — dados pessoais (nome/telefone/CPF), endereços, **formas de pagamento** (cartões salvos + PIX/dinheiro/vale, com padrão que já vem marcado no checkout), favoritos, cupons da loja, notificações e exclusão de conta (LGPD). |
 
 ## 🧱 Arquitetura
 
@@ -112,3 +113,16 @@ Os testes de jornada (`test/journey_test.dart`) simulam as escritas do painel
 da loja e do entregador exatamente como os outros sistemas fazem, validando o
 contrato do banco compartilhado: criação do pedido, separação, substituições
 com estorno, entrega com PIN, avaliação e cancelamento.
+
+### 💳 Cartões salvos e RNF10
+
+O cadastro de cartão (`lib/screens/payment_methods_screen.dart`) valida o
+número por **Luhn** e detecta a bandeira **no dispositivo**
+(`lib/services/cards.dart`); o que é persistido em `/customers/{uid}.cards` é
+apenas **bandeira, últimos 4 dígitos, validade e apelido**. O número completo
+(PAN) e o CVV nunca são gravados — nem no Firestore, nem em cache local. O
+pedido leva só `paymentCard: {brand, last4}` para a loja exibir.
+
+Para cobrança online real, plugue o SDK do gateway (ex.: Stripe) no lugar do
+formulário: o PAN vai direto para o SDK e o token retornado preenche o campo
+`token` de `SavedCard`, que já existe no modelo.

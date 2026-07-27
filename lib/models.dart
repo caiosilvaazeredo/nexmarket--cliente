@@ -427,14 +427,120 @@ class SavedAddress {
   }
 }
 
+/// Cartão salvo pelo cliente.
+///
+/// RNF10: o número completo e o CVV **nunca** saem da tela — só persistimos
+/// bandeira, últimos 4 dígitos, validade e apelido, que é o suficiente para
+/// exibir e escolher no checkout. A cobrança real é feita pelo gateway com o
+/// token do cartão (campo `token`, preenchido quando o gateway está ativo).
+class SavedCard {
+  final String id;
+  final String brand; // visa | mastercard | elo | amex | hipercard | outro
+  final String last4;
+  final String holderName;
+  final String expMonth;
+  final String expYear;
+  final String nickname;
+  final bool isCredit;
+
+  /// Token do gateway (Stripe etc.). Vazio no modo sem gateway.
+  final String token;
+
+  SavedCard({
+    required this.id,
+    required this.brand,
+    required this.last4,
+    this.holderName = '',
+    this.expMonth = '',
+    this.expYear = '',
+    this.nickname = '',
+    this.isCredit = true,
+    this.token = '',
+  });
+
+  factory SavedCard.fromMap(Map<String, dynamic> m) => SavedCard(
+        id: _s(m['id']),
+        brand: _s(m['brand'], 'outro'),
+        last4: _s(m['last4']),
+        holderName: _s(m['holderName']),
+        expMonth: _s(m['expMonth']),
+        expYear: _s(m['expYear']),
+        nickname: _s(m['nickname']),
+        isCredit: m['isCredit'] != false,
+        token: _s(m['token']),
+      );
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'brand': brand,
+        'last4': last4,
+        'holderName': holderName,
+        'expMonth': expMonth,
+        'expYear': expYear,
+        'nickname': nickname,
+        'isCredit': isCredit,
+        if (token.isNotEmpty) 'token': token,
+      };
+
+  String get brandLabel => switch (brand) {
+        'visa' => 'Visa',
+        'mastercard' => 'Mastercard',
+        'elo' => 'Elo',
+        'amex' => 'American Express',
+        'hipercard' => 'Hipercard',
+        _ => 'Cartão',
+      };
+
+  String get label => '$brandLabel •••• $last4';
+
+  String get expiry =>
+      expMonth.isEmpty || expYear.isEmpty ? '' : '$expMonth/$expYear';
+
+  /// Vencido segundo a validade informada (mês/ano).
+  bool get isExpired {
+    final m = int.tryParse(expMonth), y = int.tryParse(expYear);
+    if (m == null || y == null) return false;
+    final year = y < 100 ? 2000 + y : y;
+    final now = DateTime.now();
+    // Válido até o último dia do mês de validade.
+    return DateTime(year, m + 1, 1).isBefore(DateTime(now.year, now.month, 1));
+  }
+}
+
+class CustomerPreferences {
+  final bool pushEnabled;
+  final bool marketingOptIn;
+
+  CustomerPreferences({this.pushEnabled = true, this.marketingOptIn = false});
+
+  factory CustomerPreferences.fromMap(Map<String, dynamic> m) =>
+      CustomerPreferences(
+        pushEnabled: m['pushEnabled'] != false,
+        marketingOptIn: m['marketingOptIn'] == true,
+      );
+
+  Map<String, dynamic> toMap() =>
+      {'pushEnabled': pushEnabled, 'marketingOptIn': marketingOptIn};
+
+  CustomerPreferences copyWith({bool? pushEnabled, bool? marketingOptIn}) =>
+      CustomerPreferences(
+        pushEnabled: pushEnabled ?? this.pushEnabled,
+        marketingOptIn: marketingOptIn ?? this.marketingOptIn,
+      );
+}
+
 class CustomerProfile {
   final String uid;
   final String name;
   final String email;
   final String phone;
+  final String cpf;
   final List<SavedAddress> addresses;
   final String? defaultAddressId;
+  final List<SavedCard> cards;
+  final String? defaultPaymentMethod;
   final List<String> favorites;
+  final CustomerPreferences preferences;
   final String? lastSupermarketId;
   final double walletBalance;
 
@@ -443,12 +549,16 @@ class CustomerProfile {
     this.name = '',
     this.email = '',
     this.phone = '',
+    this.cpf = '',
     this.addresses = const [],
     this.defaultAddressId,
+    this.cards = const [],
+    this.defaultPaymentMethod,
     this.favorites = const [],
+    CustomerPreferences? preferences,
     this.lastSupermarketId,
     this.walletBalance = 0,
-  });
+  }) : preferences = preferences ?? CustomerPreferences();
 
   factory CustomerProfile.fromMap(String uid, Map<String, dynamic> m) => CustomerProfile(
         uid: uid,
@@ -461,7 +571,18 @@ class CustomerProfile {
                 .toList() ??
             const [],
         defaultAddressId: m['defaultAddressId'] as String?,
+        cpf: _s(m['cpf']),
+        cards: (m['cards'] as List?)
+                ?.whereType<Map>()
+                .map((e) => SavedCard.fromMap(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
+        defaultPaymentMethod: m['defaultPaymentMethod'] as String?,
         favorites: (m['favorites'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        preferences: m['preferences'] is Map
+            ? CustomerPreferences.fromMap(
+                Map<String, dynamic>.from(m['preferences'] as Map))
+            : null,
         lastSupermarketId: m['lastSupermarketId'] as String?,
         walletBalance: _d(m['walletBalance']),
       );
@@ -470,6 +591,16 @@ class CustomerProfile {
     if (addresses.isEmpty) return null;
     return addresses.firstWhere((a) => a.id == defaultAddressId, orElse: () => addresses.first);
   }
+
+  SavedCard? cardById(String? id) {
+    if (id == null) return null;
+    for (final c in cards) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  bool isFavorite(String productId) => favorites.contains(productId);
 }
 
 /* --------------------------- Pedidos --------------------------- */

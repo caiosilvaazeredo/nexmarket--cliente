@@ -45,6 +45,35 @@ class CustomersRepo {
   static Future<void> setLastSupermarket(String uid, String smId) =>
       update(uid, {'lastSupermarketId': smId});
 
+  /* --------------------------- Pagamento --------------------------- */
+
+  /// Salva a lista de cartões. Só chega aqui o que pode ser persistido
+  /// (bandeira, últimos 4, validade) — nunca o número completo ou o CVV.
+  static Future<void> saveCards(String uid, List<SavedCard> cards,
+          {String? defaultPaymentMethod}) =>
+      update(uid, {
+        'cards': cards.map((c) => c.toMap()).toList(),
+        if (defaultPaymentMethod != null)
+          'defaultPaymentMethod': defaultPaymentMethod,
+      });
+
+  static Future<void> setDefaultPaymentMethod(String uid, String? method) =>
+      update(uid, {'defaultPaymentMethod': method});
+
+  /* --------------------------- Favoritos --------------------------- */
+
+  static Future<void> toggleFavorite(
+      String uid, List<String> favorites, String productId) {
+    final list = List<String>.from(favorites);
+    list.contains(productId) ? list.remove(productId) : list.add(productId);
+    return update(uid, {'favorites': list});
+  }
+
+  /* --------------------------- Preferências --------------------------- */
+
+  static Future<void> savePreferences(String uid, CustomerPreferences prefs) =>
+      update(uid, {'preferences': prefs.toMap()});
+
   /// LGPD (RNF12): apaga os dados do cliente e a conta de autenticação.
   static Future<void> deleteAccount(String uid) async {
     await _ref(uid).delete();
