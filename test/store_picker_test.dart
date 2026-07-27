@@ -44,6 +44,10 @@ void main() {
       'shippingType': 'transparent',
       'flatFeeValue': 9.9,
     });
+
+    // Ambas com catálogo; testes de "mercado vazio" ajustam isso.
+    await db.doc('supermarkets/sm1/products/p1').set({'name': 'Arroz', 'price': 20});
+    await db.doc('supermarkets/sm2/products/p1').set({'name': 'Feijão', 'price': 8});
   });
 
   /// Monta o picker empurrado por cima de outra tela — o caso de "trocar de
@@ -140,8 +144,47 @@ void main() {
     await pumpAsSwitcher(tester);
 
     expect(find.textContaining('Aberto agora'), findsOneWidget);
-    expect(find.textContaining('Fechado'), findsOneWidget);
+    expect(find.textContaining('Fechado'), findsWidgets);
     expect(find.textContaining('Frete grátis'), findsWidgets);
+  });
+
+  testWidgets('mostra horário de funcionamento e endereço de cada mercado',
+      (tester) async {
+    await db.doc('supermarkets/sm1/settings/storeInfo').set({
+      'openingHours': {
+        for (final k in ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'])
+          k: {'isOpen': true, 'openTime': '08:00', 'closeTime': '22:00'}
+      },
+      'storeLocation': {
+        'address': 'Av. Brasil, 1500 - Centro',
+        'lat': -22.90,
+        'lng': -43.20,
+      },
+    });
+    await pumpAsSwitcher(tester);
+
+    expect(find.text('08:00 às 22:00'), findsOneWidget);
+    expect(find.text('Av. Brasil, 1500 - Centro'), findsOneWidget);
+    // A loja fechada mostra o aviso no lugar da faixa de horário.
+    expect(find.text('Fechado hoje'), findsOneWidget);
+  });
+
+  testWidgets('esconde mercados sem produtos cadastrados', (tester) async {
+    // Beta fica sem catálogo.
+    await db.doc('supermarkets/sm2/products/p1').delete();
+    await pumpAsSwitcher(tester);
+
+    expect(find.text('Mercado Alfa'), findsOneWidget);
+    expect(find.text('Beta Supermercados'), findsNothing);
+  });
+
+  testWidgets('produto inativo não conta como catálogo', (tester) async {
+    await db
+        .doc('supermarkets/sm2/products/p1')
+        .set({'name': 'Feijão', 'price': 8, 'active': false});
+    await pumpAsSwitcher(tester);
+
+    expect(find.text('Beta Supermercados'), findsNothing);
   });
 
   testWidgets('sem resultados oferece limpar os filtros', (tester) async {

@@ -83,4 +83,21 @@ class CatalogRepo {
       return null;
     }
   }
+
+  /// Se a loja tem ao menos um produto ativo — mercados vazios não aparecem
+  /// no seletor. Lê só uma amostra: `active` pode não existir no documento
+  /// (produto antigo = ativo), então o filtro é feito no cliente em vez de
+  /// um `where`, que descartaria esses casos.
+  static Future<bool> hasProductsOnce(String smId, {int sample = 20}) async {
+    try {
+      final snap = await Fire.db
+          .collection('supermarkets/$smId/products')
+          .limit(sample)
+          .get();
+      return snap.docs.any((d) => d.data()['active'] != false);
+    } catch (_) {
+      // Sem permissão/rede: não esconde a loja por engano.
+      return true;
+    }
+  }
 }
