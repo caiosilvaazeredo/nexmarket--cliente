@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models.dart';
 import '../state/app_state.dart';
@@ -48,6 +49,7 @@ class HomeScreen extends StatelessWidget {
         children: [
           for (final order in app.activeOrders.take(2))
             _ActiveOrderBanner(order: order),
+          if (app.storeInfo != null) _StoreInfoCard(info: app.storeInfo!),
           if (app.deliveryConfig?.surgeActive == true)
             Container(
               margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -172,6 +174,128 @@ class _GondolaSection extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Horário de funcionamento e endereço da loja atual, no topo da vitrine.
+/// Toque abre a semana inteira e a opção de ver no mapa.
+class _StoreInfoCard extends StatelessWidget {
+  final StoreInfo info;
+  const _StoreInfoCard({required this.info});
+
+  @override
+  Widget build(BuildContext context) {
+    final open = info.isOpenNow;
+    final hours = info.todayRange;
+    final address = info.address ?? '';
+    if (hours.isEmpty && address.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Card(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _showDetails(context),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Icon(open ? Icons.schedule : Icons.schedule_outlined,
+                    color: open ? kGreenDark : Colors.redAccent),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        open ? 'Aberto agora · $hours' : 'Fechado · $hours',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13.5,
+                            color: open ? kGreenDark : Colors.redAccent),
+                      ),
+                      if (address.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(address,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 12.5, color: Colors.grey.shade600)),
+                        ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: Colors.grey.shade400),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showDetails(BuildContext context) {
+    final address = info.address ?? '';
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Horário de funcionamento',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 10),
+              for (final d in info.weeklyHours)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(d.day,
+                          style: TextStyle(
+                              fontWeight:
+                                  d.isToday ? FontWeight.w900 : FontWeight.w600)),
+                      Text(d.label,
+                          style: TextStyle(
+                              fontWeight:
+                                  d.isToday ? FontWeight.w900 : FontWeight.w600,
+                              color: d.label == 'Fechado'
+                                  ? Colors.grey.shade500
+                                  : null)),
+                    ],
+                  ),
+                ),
+              if (address.isNotEmpty) ...[
+                const Divider(height: 28),
+                const Text('Endereço',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 6),
+                Text(address, style: TextStyle(color: Colors.grey.shade700)),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.map_outlined),
+                  label: const Text('Ver no mapa'),
+                  onPressed: () {
+                    final query = info.lat != null && info.lng != null
+                        ? '${info.lat},${info.lng}'
+                        : Uri.encodeComponent(address);
+                    launchUrl(
+                        Uri.parse(
+                            'https://www.google.com/maps/search/?api=1&query=$query'),
+                        mode: LaunchMode.externalApplication);
+                  },
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

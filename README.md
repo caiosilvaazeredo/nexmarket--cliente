@@ -39,8 +39,8 @@ flutter build ipa    # build iOS (requer macOS/Xcode)
 
 | Fase | Implementação |
 |---|---|
-| **Descoberta** | `lib/screens/store_picker.dart` — escolha da loja com **busca por nome e filtros** (abertos agora, frete grátis) e **ordenação por distância** (GPS), menor frete ou A–Z; cada card mostra status, distância e frete. Navegação **livre sem login** (o login só é exigido no checkout). |
-| **Vitrine / gôndolas** | `home_screen.dart` (carrosséis por gôndola), `category_screen.dart`, `search_screen.dart` (busca tolerante + filtros), `product_screen.dart` (descrição, tabela nutricional, tags). |
+| **Descoberta** | `lib/screens/store_picker.dart` — escolha da loja com **busca por nome e filtros** (abertos agora, frete grátis) e **ordenação por distância** (GPS), menor frete ou A–Z. Cada card mostra **status (aberto/fechado), horário de hoje, endereço, distância e frete**; mercados **sem produtos cadastrados não aparecem**. Navegação **livre sem login** (o login só é exigido no checkout). |
+| **Vitrine / gôndolas** | `home_screen.dart` (carrosséis por gôndola + card de **horário/endereço da loja**, que abre a semana inteira e o mapa), `category_screen.dart`, `search_screen.dart` (busca tolerante + filtros), `product_screen.dart` (descrição, tabela nutricional, tags). |
 | **Carrinho / checkout** | `cart_screen.dart` (cupom, frete, pedido mínimo) → `checkout_screen.dart` (entrega/retirada, pagamento, agendamento, gorjeta, revisão — tela única). |
 | **Acompanhamento** | `order_screen.dart` — status em tempo real, rastreio do entregador, PIN de entrega, **revisão de substituições** com estorno, cancelamento, chat. |
 | **Pós-venda** | Avaliação 1–5★ + tags de problema; **repetir pedido** em 1 toque revalidando estoque/preço. |

@@ -15,7 +15,16 @@ class StoreEntry {
   final DeliveryConfig? delivery;
   final double? distanceMeters;
 
-  StoreEntry({required this.store, this.info, this.delivery, this.distanceMeters});
+  /// `null` enquanto ainda não sabemos se a loja tem catálogo.
+  final bool? hasProducts;
+
+  StoreEntry({
+    required this.store,
+    this.info,
+    this.delivery,
+    this.distanceMeters,
+    this.hasProducts,
+  });
 
   bool get isOpen => info?.isOpenNow ?? true;
   bool get hasFreeShipping => (delivery?.deliveryFee ?? 0) == 0;
@@ -25,6 +34,7 @@ class StoreEntry {
         info: info,
         delivery: delivery,
         distanceMeters: meters,
+        hasProducts: hasProducts,
       );
 }
 
@@ -56,20 +66,20 @@ class _StorePickerScreenState extends State<StorePickerScreen> {
   final Map<String, StoreEntry> _details = {};
   final Set<String> _loading = {};
 
-  /// Busca horários + política de entrega de uma loja, uma única vez.
+  /// Busca horários, política de entrega e se há catálogo — uma única vez.
   Future<void> _loadDetails(Supermarket sm) async {
     if (_details.containsKey(sm.id) || _loading.contains(sm.id)) return;
     _loading.add(sm.id);
-    final results = await Future.wait([
-      CatalogRepo.storeInfoOnce(sm.id),
-      CatalogRepo.deliveryConfigOnce(sm.id),
-    ]);
+    final info = await CatalogRepo.storeInfoOnce(sm.id);
+    final delivery = await CatalogRepo.deliveryConfigOnce(sm.id);
+    final hasProducts = await CatalogRepo.hasProductsOnce(sm.id);
     if (!mounted) return;
     setState(() {
       _details[sm.id] = StoreEntry(
         store: sm,
-        info: results[0] as StoreInfo?,
-        delivery: results[1] as DeliveryConfig?,
+        info: info,
+        delivery: delivery,
+        hasProducts: hasProducts,
       );
       _loading.remove(sm.id);
     });
@@ -128,6 +138,9 @@ class _StorePickerScreenState extends State<StorePickerScreen> {
     if (q.isNotEmpty) {
       list = list.where((e) => e.store.name.toLowerCase().contains(q)).toList();
     }
+    // Mercado sem catálogo não tem o que comprar — só some depois que a
+    // checagem responde, para a lista não piscar enquanto carrega.
+    list = list.where((e) => e.hasProducts != false).toList();
     // Filtros só descartam quando os detalhes já chegaram — evita a lista
     // "piscar" vazia enquanto carrega.
     if (_openOnly) {
@@ -368,63 +381,139 @@ class _StoreTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sm = entry.store;
-    final loaded = entry.info != null || entry.delivery != null;
+    final info = entry.info;
+    final loaded = info != null || entry.delivery != null;
     final fee = entry.delivery?.deliveryFee;
+    final open = entry.isOpen;
 
-    final subtitle = <String>[
-      if (loaded) (entry.isOpen ? 'Aberto agora' : 'Fechado'),
+    // Linha 1: status + distância + frete. Linhas 2 e 3: horário e endereço.
+    final statusLine = <String>[
       if (distanceLabel != null) distanceLabel!,
       if (fee != null) (fee == 0 ? 'Frete grátis' : 'Frete ${money(fee)}'),
     ].join(' · ');
+    final hours = info?.todayRange ?? '';
+    final address = info?.address ?? '';
 
     return Card(
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: CircleAvatar(
-          backgroundColor: kGreen.withValues(alpha: .15),
-          backgroundImage:
-              (sm.logoUrl ?? '').isNotEmpty ? NetworkImage(sm.logoUrl!) : null,
-          child: (sm.logoUrl ?? '').isEmpty
-              ? const Icon(Icons.store, color: kGreenDark)
-              : null,
-        ),
-        title: Row(
-          children: [
-            Flexible(
-              child: Text(sm.name,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w800)),
-            ),
-            if (isCurrent)
-              Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: kGreen.withValues(alpha: .18),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Text('Atual',
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w900,
-                          color: kGreenDark)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                backgroundColor: kGreen.withValues(alpha: .15),
+                backgroundImage: (sm.logoUrl ?? '').isNotEmpty
+                    ? NetworkImage(sm.logoUrl!)
+                    : null,
+                child: (sm.logoUrl ?? '').isEmpty
+                    ? const Icon(Icons.store, color: kGreenDark)
+                    : null,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(sm.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w800, fontSize: 15)),
+                        ),
+                        if (isCurrent)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: kGreen.withValues(alpha: .18),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Text('Atual',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w900,
+                                      color: kGreenDark)),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    if (loaded)
+                      Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: open ? kGreen : Colors.redAccent,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(open ? 'Aberto agora' : 'Fechado',
+                              style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: open ? kGreenDark : Colors.redAccent)),
+                          if (statusLine.isNotEmpty)
+                            Flexible(
+                              child: Text(' · $statusLine',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 12.5,
+                                      color: Colors.grey.shade600)),
+                            ),
+                        ],
+                      ),
+                    if (hours.isNotEmpty)
+                      _IconLine(icon: Icons.schedule, text: hours),
+                    if (address.isNotEmpty)
+                      _IconLine(icon: Icons.place_outlined, text: address),
+                  ],
                 ),
               ),
-          ],
+              Padding(
+                padding: const EdgeInsets.only(top: 6, left: 4),
+                child: Icon(
+                    isCurrent ? Icons.check_circle : Icons.chevron_right,
+                    color: isCurrent ? kGreen : Colors.grey.shade400),
+              ),
+            ],
+          ),
         ),
-        subtitle: subtitle.isEmpty
-            ? null
-            : Text(subtitle,
-                style: TextStyle(
-                    fontSize: 12.5,
-                    color: loaded && !entry.isOpen
-                        ? Colors.redAccent
-                        : Colors.grey.shade600)),
-        trailing: Icon(isCurrent ? Icons.check_circle : Icons.chevron_right,
-            color: isCurrent ? kGreen : null),
-        onTap: onTap,
+      ),
+    );
+  }
+}
+
+class _IconLine extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _IconLine({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 14, color: Colors.grey.shade500),
+          const SizedBox(width: 5),
+          Expanded(
+            child: Text(text,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12.5, color: Colors.grey.shade600)),
+          ),
+        ],
       ),
     );
   }

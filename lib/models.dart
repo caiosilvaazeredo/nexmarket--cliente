@@ -301,6 +301,38 @@ class StoreInfo {
     if (today == null || !today.isOpen) return 'Fechado hoje';
     return 'Hoje: ${today.openTime} às ${today.closeTime}';
   }
+
+  /// Faixa de hoje sem o prefixo ("08:00 às 20:00"), para listas compactas.
+  String get todayRange {
+    if (openingHours.isEmpty) return '';
+    final today = openingHours[_dayKeys[DateTime.now().weekday % 7]];
+    if (today == null || !today.isOpen) return 'Fechado hoje';
+    return '${today.openTime} às ${today.closeTime}';
+  }
+
+  static const _dayLabels = {
+    'mon': 'Segunda',
+    'tue': 'Terça',
+    'wed': 'Quarta',
+    'thu': 'Quinta',
+    'fri': 'Sexta',
+    'sat': 'Sábado',
+    'sun': 'Domingo',
+  };
+
+  /// Horários da semana inteira, para a tela de informações da loja.
+  List<({String day, String label, bool isToday})> get weeklyHours {
+    if (openingHours.isEmpty) return const [];
+    final todayKey = _dayKeys[DateTime.now().weekday % 7];
+    return _dayLabels.entries.map((e) {
+      final h = openingHours[e.key];
+      return (
+        day: e.value,
+        label: h != null && h.isOpen ? '${h.openTime} - ${h.closeTime}' : 'Fechado',
+        isToday: e.key == todayKey,
+      );
+    }).toList();
+  }
 }
 
 /// Config white-label do GondolaAppBuilder (RNF01).
