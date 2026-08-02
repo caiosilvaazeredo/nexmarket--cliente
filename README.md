@@ -147,3 +147,18 @@ flutter build apk --dart-define=NEXMARKET_API=https://pagamentos.seudominio.com
 
 Sem essa variável o app continua funcionando normalmente (login pelo Firebase
 Auth nativo), apenas sem o registro de papéis e sem o e-mail personalizado.
+
+---
+
+## 👤 Conta única na plataforma
+
+O mesmo e-mail é **uma só pessoa** nos quatro apps. Após cadastro e login o
+app chama `POST /api/identity/claim` registrando o papel `entregador` — quem
+já é cliente vira entregador com o **mesmo uid**, sem conta paralela. A
+recuperação de senha passa pelo servidor e a nova senha vale para todos os
+apps.
+
+```bash
+flutter run   --dart-define=NEXMARKET_API=https://pagamentos.seudominio.com
+flutter build apk --dart-define=NEXMARKET_API=https://pagamentos.seudominio.com
+```
