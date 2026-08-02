@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../services/customers_repo.dart';
 import '../services/fire.dart';
+import '../services/identity_api.dart';
 
 /// Login por e-mail/senha (RF01) e recuperação de senha (RF02). Login social
 /// (Google/Apple/telefone) pode ser adicionado com os pacotes google_sign_in /
@@ -63,6 +64,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 : () => _run(() async {
                       await Fire.auth.signInWithEmailAndPassword(
                           email: _email.text.trim(), password: _password.text);
+                      // Contas criadas antes da identidade unificada ganham o
+                      // papel aqui, sem o usuário perceber.
+                      await IdentityApi.claim(role: 'cliente');
                     }),
             child: _busy
                 ? const SizedBox(
@@ -120,6 +124,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       await cred.user?.updateDisplayName(_name.text.trim());
       await CustomersRepo.ensureProfile(cred.user!.uid,
           name: _name.text.trim(), email: _email.text.trim(), phone: _phone.text.trim());
+      // Registra o papel na identidade única da plataforma (o mesmo e-mail
+      // passa a ser a mesma pessoa nos quatro apps) e dispara o e-mail de
+      // boas-vindas pelo servidor.
+      await IdentityApi.claim(role: 'cliente', name: _name.text.trim());
       if (mounted) Navigator.of(context).pop(true);
     } on FirebaseAuthException catch (e) {
       if (mounted) {
@@ -187,7 +195,9 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          const Text('Enviaremos um link de redefinição para o seu e-mail.'),
+          const Text(
+              'Enviaremos um link de redefinição para o seu e-mail. A nova '
+              'senha vale para todos os apps da Nexmarket.'),
           const SizedBox(height: 16),
           TextField(
               controller: _email,
@@ -198,9 +208,15 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
             onPressed: _sent
                 ? null
                 : () async {
+                    final email = _email.text.trim();
+                    // Preferimos o servidor (mesmo e-mail para os 4 apps e a
+                    // senha vale em todos); sem ele, cai no Firebase nativo.
+                    if (await IdentityApi.forgotPassword(email)) {
+                      if (context.mounted) setState(() => _sent = true);
+                      return;
+                    }
                     try {
-                      await Fire.auth
-                          .sendPasswordResetEmail(email: _email.text.trim());
+                      await Fire.auth.sendPasswordResetEmail(email: email);
                       setState(() => _sent = true);
                     } on FirebaseAuthException catch (e) {
                       if (context.mounted) {

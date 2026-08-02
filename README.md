@@ -126,3 +126,24 @@ pedido leva só `paymentCard: {brand, last4}` para a loja exibir.
 Para cobrança online real, plugue o SDK do gateway (ex.: Stripe) no lugar do
 formulário: o PAN vai direto para o SDK e o token retornado preenche o campo
 `token` de `SavedCard`, que já existe no modelo.
+
+---
+
+## 👤 Conta única na plataforma
+
+O mesmo e-mail é **uma só pessoa** nos quatro apps da Nexmarket. Após o
+cadastro e o login, o app chama `POST /api/identity/claim` no servidor
+(`nexmarket--Empresa/server`) registrando o papel `cliente` — assim quem já é
+entregador, por exemplo, entra como cliente com o **mesmo uid**, sem criar
+conta paralela. A recuperação de senha também passa pelo servidor, e a nova
+senha vale para todos os apps.
+
+Configure a URL do servidor no build:
+
+```bash
+flutter run   --dart-define=NEXMARKET_API=https://pagamentos.seudominio.com
+flutter build apk --dart-define=NEXMARKET_API=https://pagamentos.seudominio.com
+```
+
+Sem essa variável o app continua funcionando normalmente (login pelo Firebase
+Auth nativo), apenas sem o registro de papéis e sem o e-mail personalizado.
