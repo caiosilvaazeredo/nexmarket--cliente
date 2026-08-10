@@ -1,0 +1,51 @@
+# Blueprint do Render — app do cliente na web.
+#
+# O mesmo código do APK roda no navegador: o cliente abre pelo celular, usa
+# tudo (vitrine, carrinho, checkout, acompanhamento) e pode **instalar na tela
+# inicial** — o Flutter web gera um PWA com manifest e service worker.
+#
+# É a forma mais rápida de colocar o app na mão das pessoas sem esperar
+# revisão da Play Store; o APK continua valendo para a distribuição nativa.
+
+services:
+  - type: web
+    name: nexmarket-cliente
+    runtime: static
+    buildCommand: bash scripts/render-build.sh
+    staticPublishPath: ./build/web
+
+    envVars:
+      # URL do servidor de identidade/pagamentos (repositório nexmarket--Empresa).
+      # Sem ela o app funciona, mas não registra os papéis na conta única.
+      - key: NEXMARKET_API
+        sync: false
+      - key: FLUTTER_VERSION
+        value: "3.32.5"
+
+    # O roteador do Flutter usa history API: toda rota precisa cair no
+    # index.html, senão recarregar a página dá 404.
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      # Bundles e CanvasKit têm hash/versão no caminho — cache longo é seguro
+      # e faz muita diferença no 4G do cliente.
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /canvaskit/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      # O service worker NUNCA pode ser cacheado: é ele que entrega as versões
+      # novas do app.
+      - path: /flutter_service_worker.js
+        name: Cache-Control
+        value: no-cache, no-store, must-revalidate
+      - path: /index.html
+        name: Cache-Control
+        value: no-cache
