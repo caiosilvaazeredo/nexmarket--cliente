@@ -197,3 +197,26 @@ redes onde o CDN do Google é bloqueado.
 
 Para o **cliente** isso não atrapalha: o acompanhamento do pedido acontece com
 o app aberto.
+
+---
+
+## 📍 Coordenadas do endereço de entrega
+
+Ao salvar um endereço o app tenta obter o ponto no mapa, e mostra na tela se
+conseguiu. Duas formas, porque nenhuma serve sempre:
+
+- **Buscar pelo endereço** — geocodificação pelo Nominatim (OpenStreetMap).
+  Funciona de qualquer lugar, mas erra quando o nome da rua se repete na
+  cidade. É o que roda automaticamente ao salvar, se ainda não houver ponto.
+- **Estou aqui agora** — GPS do aparelho. Exato, mas só vale se a pessoa
+  estiver no endereço; por isso não é automático.
+
+Sem coordenadas, o pedido chega ao entregador só com o texto: o mapa da
+entrega fica sem destino e o Waze/Google Maps precisa adivinhar a rua. Falhar
+a busca **não impede salvar** — o endereço escrito continua valendo.
+
+O Nominatim é gratuito, mas pede no máximo 1 consulta por segundo e proíbe
+geocodificação em massa (`lib/services/geocoding.dart` respeita o intervalo e
+se identifica). O uso aqui cabe: uma consulta ao salvar um endereço, não por
+pedido. Se a operação crescer, troque a URL por um provedor contratado — o
+resto do código não muda.

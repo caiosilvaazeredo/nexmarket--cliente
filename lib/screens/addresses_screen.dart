@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 
 import '../models.dart';
 import '../services/customers_repo.dart';
+import '../services/geocoding.dart';
 import '../state/app_state.dart';
+import '../theme.dart';
 import '../widgets/common.dart';
 
 /// Catálogo de endereços (Casa, Trabalho…) — RF03, com CEP/ViaCEP (RF04).
@@ -100,6 +103,74 @@ class _AddressEditScreenState extends State<AddressEditScreen> {
   bool _default = false;
   bool _cepBusy = false;
   bool _saving = false;
+  bool _locBusy = false;
+
+  /// Coordenadas do endereço. Sem elas o entregador recebe só o texto: o mapa
+  /// da entrega fica sem destino e o Waze/Maps tem de adivinhar a rua, o que
+  /// erra de bairro quando o nome se repete na cidade.
+  late double? _lat = widget.address?.lat;
+  late double? _lng = widget.address?.lng;
+
+  bool get _hasPoint => _lat != null && _lng != null;
+
+  String get _query => addressQuery(
+        street: _street.text,
+        number: _number.text,
+        neighborhood: _neighborhood.text,
+        city: _city.text,
+        state: _state.text,
+        cep: _cep.text,
+      );
+
+  /// Busca as coordenadas pelo endereço escrito.
+  ///
+  /// [silent] é o uso automático ao salvar: aí uma falha não vira aviso na
+  /// tela, porque o endereço em si continua válido — só fica sem o ponto.
+  Future<void> _geocode({bool silent = false}) async {
+    if (!silent) setState(() => _locBusy = true);
+    final found = await Geocoding.search(_query);
+    if (found != null) {
+      _lat = found.lat;
+      _lng = found.lng;
+    }
+    if (!mounted) return;
+    setState(() => _locBusy = false);
+    if (!silent && found == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Não achamos este endereço no mapa. '
+              'Confira rua, número e cidade — ou use "Estou aqui agora".')));
+    }
+  }
+
+  /// Coordenada pelo GPS: mais precisa que a busca por texto, e a melhor
+  /// opção quando a pessoa está cadastrando o endereço de casa estando em
+  /// casa. Não é sempre verdade, por isso não é automático.
+  Future<void> _useCurrentPosition() async {
+    setState(() => _locBusy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        throw 'Ligue a localização do aparelho.';
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        throw 'Permissão de localização negada.';
+      }
+      final pos = await Geolocator.getCurrentPosition();
+      _lat = pos.latitude;
+      _lng = pos.longitude;
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text('$e')));
+      }
+    } finally {
+      if (mounted) setState(() => _locBusy = false);
+    }
+  }
 
   Future<void> _lookupCep() async {
     setState(() => _cepBusy = true);
@@ -127,6 +198,12 @@ class _AddressEditScreenState extends State<AddressEditScreen> {
     }
     setState(() => _saving = true);
     try {
+      // Última chance de conseguir o ponto: quem preencheu o endereço e saiu
+      // salvando não vai voltar para clicar num botão, e um endereço sem
+      // coordenada atrapalha a entrega inteira. Falha aqui é silenciosa de
+      // propósito — não impede salvar.
+      if (!_hasPoint) await _geocode(silent: true);
+
       final id = widget.address?.id.isNotEmpty == true
           ? widget.address!.id
           : DateTime.now().millisecondsSinceEpoch.toString();
@@ -142,8 +219,8 @@ class _AddressEditScreenState extends State<AddressEditScreen> {
         city: _city.text.trim(),
         state: _state.text.trim(),
         reference: _reference.text.trim(),
-        lat: widget.address?.lat,
-        lng: widget.address?.lng,
+        lat: _lat,
+        lng: _lng,
       );
       final list = List<SavedAddress>.from(app.profile?.addresses ?? []);
       final idx = list.indexWhere((a) => a.id == id);
@@ -249,6 +326,15 @@ class _AddressEditScreenState extends State<AddressEditScreen> {
             ],
           ),
           const SizedBox(height: 12),
+          // Depois de cidade/UF de propósito: a busca por endereço só é boa
+          // com esses campos preenchidos.
+          _LocationBox(
+            hasPoint: _hasPoint,
+            busy: _locBusy,
+            onGeocode: () => _geocode(),
+            onGps: _useCurrentPosition,
+          ),
+          const SizedBox(height: 12),
           TextField(
               controller: _reference,
               decoration: const InputDecoration(
@@ -283,6 +369,96 @@ class _AddressEditScreenState extends State<AddressEditScreen> {
                     height: 22,
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Text('Salvar endereço'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Estado do ponto no mapa, com as duas formas de obtê-lo.
+///
+/// Aparece na tela em vez de acontecer só nos bastidores porque o cliente é
+/// quem sabe se o pino caiu no lugar certo — e é ele quem sofre se o
+/// entregador for parar na rua de trás.
+class _LocationBox extends StatelessWidget {
+  final bool hasPoint;
+  final bool busy;
+  final VoidCallback onGeocode;
+  final VoidCallback onGps;
+
+  const _LocationBox({
+    required this.hasPoint,
+    required this.busy,
+    required this.onGeocode,
+    required this.onGps,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: hasPoint
+            ? kGreen.withValues(alpha: .08)
+            : Colors.orange.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: hasPoint
+                ? kGreen.withValues(alpha: .4)
+                : Colors.orange.withValues(alpha: .4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(hasPoint ? Icons.place : Icons.wrong_location_outlined,
+                  size: 18,
+                  color: hasPoint ? kGreenDark : Colors.orange.shade800),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  hasPoint
+                      ? 'Localização no mapa definida'
+                      : 'Sem localização no mapa',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              if (busy)
+                const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            hasPoint
+                ? 'O entregador vai receber o ponto exato — sem procurar a rua.'
+                : 'Ao salvar, tentamos achar pelo endereço. Se estiver no '
+                    'local agora, o GPS acerta melhor.',
+            style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: busy ? null : onGeocode,
+                  icon: const Icon(Icons.search, size: 17),
+                  label: const Text('Buscar pelo endereço'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: busy ? null : onGps,
+                  icon: const Icon(Icons.my_location, size: 17),
+                  label: const Text('Estou aqui agora'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
