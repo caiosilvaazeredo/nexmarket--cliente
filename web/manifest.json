@@ -1,12 +1,15 @@
 {
-    "name": "nexmarket_cliente",
-    "short_name": "nexmarket_cliente",
-    "start_url": ".",
+    "name": "Nexmarket",
+    "short_name": "Nexmarket",
+    "start_url": "/",
+    "scope": "/",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#F7F7F7",
+    "theme_color": "#58CC02",
+    "description": "Peça no mercado do seu bairro e receba em casa. Compare preços, acompanhe o entregador em tempo real e pague como preferir.",
+    "lang": "pt-BR",
     "orientation": "portrait-primary",
+    "categories": ["shopping", "food"],
     "prefer_related_applications": false,
     "icons": [
         {
