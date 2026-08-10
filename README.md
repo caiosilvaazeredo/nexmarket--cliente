@@ -162,3 +162,38 @@ apps.
 flutter run   --dart-define=NEXMARKET_API=https://pagamentos.seudominio.com
 flutter build apk --dart-define=NEXMARKET_API=https://pagamentos.seudominio.com
 ```
+
+---
+
+## 🌐 Publicar na web (Render)
+
+O mesmo código do APK roda no navegador. É a forma mais rápida de colocar o
+app na mão das pessoas sem esperar revisão da Play Store — e, como o Flutter
+web gera um PWA, o cliente pode **instalar na tela inicial** do celular
+(Chrome: "Adicionar à tela inicial"; Safari: Compartilhar → "Adicionar à Tela
+de Início"). O APK continua valendo para a distribuição nativa.
+
+O repositório traz um `render.yaml` pronto:
+
+1. No Render: **New → Blueprint** e aponte para este repositório.
+2. Escolha a branch onde está o `render.yaml`
+   (`claude/flutter-client-delivery-apps-m8lmbw`, ou `main` depois do merge).
+3. Preencha a variável `NEXMARKET_API` com a URL do servidor de pagamentos
+   (o serviço `nexmarket-payments`, do repositório `nexmarket--Empresa`).
+   Ela fica em branco no Blueprint de propósito.
+
+O build usa `scripts/render-build.sh`, que baixa o SDK do Flutter, compila em
+release e copia o CanvasKit para dentro do site — assim a página abre mesmo em
+redes onde o CDN do Google é bloqueado.
+
+### Diferenças da web para o APK
+
+| | Web (PWA) | APK |
+|---|---|---|
+| Instalação | link, sem loja | arquivo / Play Store |
+| Atualização | automática no reload | reinstalar |
+| Notificação push | depende do navegador (iOS só ≥ 16.4, instalado) | nativa |
+| GPS em segundo plano | não | sim |
+
+Para o **cliente** isso não atrapalha: o acompanhamento do pedido acontece com
+o app aberto.
