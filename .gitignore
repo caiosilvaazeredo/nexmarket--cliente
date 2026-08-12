@@ -1,31 +1,27 @@
-# dependencies
-node_modules/
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+.vscode/
 
-# Expo
-.expo/
-dist/
-web-build/
-expo-env.d.ts
+# Android
+android/.gradle/
+android/local.properties
+android/app/.cxx/
+android/key.properties
+**/android/**/GeneratedPluginRegistrant.java
 
-# Native
-/ios
-/android
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/ephemeral/
+**/ios/**/GeneratedPluginRegistrant.*
 
-# Metro
-.metro-health-check*
-
-# debug
-npm-debug.*
-yarn-debug.*
-yarn-error.*
-
-# macOS
-.DS_Store
-*.pem
-
-# local env files
-.env*.local
+# Env
 .env
-
-# typescript
-*.tsbuildinfo
