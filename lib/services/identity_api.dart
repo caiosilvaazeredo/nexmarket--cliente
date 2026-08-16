@@ -15,9 +15,30 @@ import 'fire.dart';
 /// Configure a URL no build:
 ///   flutter run --dart-define=NEXMARKET_API=https://pagamentos.suaempresa.com
 class IdentityApi {
-  static const baseUrl = String.fromEnvironment('NEXMARKET_API');
+  /// Valor fixado na compilação. Se o `--dart-define` for esquecido, ele vem
+  /// vazio — e antes isso desligava tudo em silêncio: o papel não era
+  /// registrado, o e-mail de boas-vindas não saía, e nada indicava o motivo.
+  /// Um APK assim parecia funcionar, só não unificava a conta.
+  static const _fromBuild = String.fromEnvironment('NEXMARKET_API');
+
+  /// Endereço público do servidor da plataforma — não é segredo, é o mesmo
+  /// que os quatro apps chamam. Serve de rede de proteção para o caso acima.
+  static const _padrao = 'https://nexmarket-payments-60k3.onrender.com';
+
+  static String get baseUrl => _fromBuild.isNotEmpty ? _fromBuild : _padrao;
 
   static bool get configured => baseUrl.isNotEmpty;
+
+  /// A hospedagem hiberna sem uso e a primeira chamada do dia pode levar quase
+  /// um minuto só para acordar o servidor.
+  ///
+  /// `claim` e `myRoles` usam o prazo curto porque a pessoa está esperando na
+  /// tela e ambos são refeitos a cada login — a chamada que falha já deixa o
+  /// servidor acordando para a próxima. Já a recuperação de senha não tem
+  /// segunda chance: é ali que a pessoa espera o e-mail chegar, então vale
+  /// aguardar de verdade.
+  static const _prazoCurto = Duration(seconds: 20);
+  static const _prazoLongo = Duration(seconds: 60);
 
   static Future<Map<String, String>?> _authHeaders() async {
     final token = await Fire.auth.currentUser?.getIdToken();
@@ -41,7 +62,7 @@ class IdentityApi {
             headers: headers,
             body: jsonEncode({'role': role, if (name != null) 'name': name}),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(_prazoCurto);
       if (res.statusCode == 409) {
         debugPrint('[identity] e-mail já pertence a outra conta: ${res.body}');
         return false;
@@ -61,7 +82,7 @@ class IdentityApi {
       if (headers == null) return const {};
       final res = await http
           .get(Uri.parse('$baseUrl/api/identity/me'), headers: headers)
-          .timeout(const Duration(seconds: 10));
+          .timeout(_prazoCurto);
       if (res.statusCode != 200) return const {};
       final roles = (jsonDecode(res.body) as Map)['roles'] as Map?;
       return roles?.map((k, v) => MapEntry(k.toString(), v == true)) ?? const {};
@@ -82,7 +103,7 @@ class IdentityApi {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'email': email, 'app': role}),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(_prazoLongo);
       return res.statusCode == 200;
     } catch (e) {
       debugPrint('[identity] forgot-password falhou: $e');
