@@ -14,7 +14,6 @@ import {
   Ticket,
   Check,
   Plus,
-  Wallet,
 } from 'lucide-react-native';
 
 import { Button } from '../src/components/ui/Button';
@@ -27,14 +26,14 @@ import { useAppStore } from '../src/store/useAppStore';
 import { useCartStore } from '../src/store/useCartStore';
 import { lineTotal, effectiveUnitPrice, applyCoupon } from '../src/lib/promotions';
 import { computeDeliveryFee, meetsMinimum, surgeActive } from '../src/lib/storeHours';
+import { calcServiceFee, meetsMinimumOrder, MIN_ORDER_BRL } from '../src/lib/fees';
 import { placeOrder, markPaid } from '../src/lib/orders';
 import { spendWallet } from '../src/lib/wallet';
-import { getGatewayConfig, type GatewayPublicConfig } from '../src/lib/payments';
 import { successHaptic, getExpoPushToken } from '../src/lib/notifications';
 import type { PaymentMethod, FulfillmentType, Order } from '../src/lib/types';
 
 /** Métodos cobrados online (abrem a folha de pagamento após criar o pedido). */
-const ONLINE_METHODS: PaymentMethod[] = ['pix', 'card_online', 'picpay', 'nupay'];
+const ONLINE_METHODS: PaymentMethod[] = ['pix', 'card_online'];
 
 export default function Checkout() {
   const { colors } = useColors();
@@ -75,6 +74,9 @@ export default function Checkout() {
   const myOrders = useAppStore((s) => s.myOrders);
   const subtotal = useMemo(() => lines.reduce((a, l) => a + lineTotal(l.product, l.quantity, promotions), 0), [lines, promotions]);
   const deliveryFee = fulfillment === 'delivery' ? computeDeliveryFee(deliveryConfig) : 0;
+  // Taxa de serviço da plataforma (regras comerciais da fase piloto) — 100%
+  // retida pela plataforma, ver src/lib/fees.ts.
+  const serviceFee = calcServiceFee(subtotal);
   // Re-evaluate the coupon against the chosen fulfillment so a free-shipping
   // coupon doesn't grant a phantom discount on a pickup order.
   const discount = useMemo(() => {
@@ -84,26 +86,18 @@ export default function Checkout() {
   }, [couponCode, subtotal, promotions, deliveryFee, myOrders.length, couponDiscount]);
   // Gorjeta: 100% vai para o entregador; só em pedidos com entrega.
   const tipValue = fulfillment === 'delivery' ? tip : 0;
-  const totalBeforeWallet = Math.max(0, subtotal + deliveryFee - discount) + tipValue;
+  const totalBeforeWallet = Math.max(0, subtotal + deliveryFee - discount) + serviceFee + tipValue;
   // Carteira (cashback): saldo pode abater até o valor total do pedido.
   const walletBalance = Number(customer?.walletBalance || 0);
   const walletUsed = useWallet ? Math.min(walletBalance, totalBeforeWallet) : 0;
   const total = Number(Math.max(0, totalBeforeWallet - walletUsed).toFixed(2));
   const surge = surgeActive(deliveryConfig);
   const min = meetsMinimum(deliveryConfig, subtotal);
+  const meetsPlatformMin = meetsMinimumOrder(subtotal);
 
   const address = customer?.addresses?.find((a) => a.id === addressId) || null;
 
-  // Carteiras extras (PicPay/NuPay) aparecem apenas quando o servidor habilita.
-  const [gwConfig, setGwConfig] = useState<GatewayPublicConfig>({});
-  useEffect(() => {
-    getGatewayConfig().then(setGwConfig).catch(() => {});
-  }, []);
-
-  const paymentOptions = useMemo(
-    () => buildPaymentOptions(storeInfo?.paymentMethods, gwConfig.wallets),
-    [storeInfo, gwConfig],
-  );
+  const paymentOptions = useMemo(() => buildPaymentOptions(storeInfo?.paymentMethods), [storeInfo]);
 
   useEffect(() => {
     if (!payment && paymentOptions.length) setPayment(paymentOptions[0].method);
@@ -130,6 +124,10 @@ export default function Checkout() {
     }
     if (!min.ok) {
       Alert.alert('Pedido mínimo', `Faltam ${brl(min.missing)} para o pedido mínimo.`);
+      return;
+    }
+    if (!meetsPlatformMin) {
+      Alert.alert('Pedido mínimo', `O pedido mínimo da plataforma é ${brl(MIN_ORDER_BRL)}.`);
       return;
     }
     if (!payment) return;
@@ -344,6 +342,7 @@ export default function Checkout() {
             <Row label="Subtotal" value={brl(subtotal)} colors={colors} />
             {discount > 0 ? <Row label="Desconto" value={`- ${brl(discount)}`} colors={colors} /> : null}
             <Row label={surge ? 'Frete (alta demanda ⚡)' : 'Frete'} value={deliveryFee > 0 ? brl(deliveryFee) : 'Grátis'} colors={colors} />
+            <Row label="Taxa de serviço" value={brl(serviceFee)} colors={colors} />
             {tipValue > 0 ? <Row label="Gorjeta do entregador" value={brl(tipValue)} colors={colors} /> : null}
             {walletUsed > 0 ? <Row label="Saldo da carteira" value={`- ${brl(walletUsed)}`} colors={colors} /> : null}
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
@@ -362,8 +361,8 @@ export default function Checkout() {
         <Button label="Confirmar pedido" size="lg" loading={placing} onPress={finalize} />
       </View>
 
-      {/* Pagamento online (PIX / cartão) — Stripe real quando o servidor de
-          pagamentos está configurado; demonstração caso contrário. */}
+      {/* Pagamento online (PIX / cartão) — cobrança real via Pagar.me quando o
+          servidor de pagamentos está configurado; demonstração caso contrário. */}
       {payModal ? (
         <PayOnlineSheet
           visible
@@ -400,13 +399,10 @@ interface PayOpt {
   icon: (color: string) => React.ReactNode;
 }
 
-function buildPaymentOptions(pm?: any, wallets?: { picpay?: boolean; nupay?: boolean }): PayOpt[] {
+function buildPaymentOptions(pm?: any): PayOpt[] {
   const opts: PayOpt[] = [];
   if (!pm || pm.pix) opts.push({ method: 'pix', label: 'PIX', hint: 'Aprovação na hora', icon: (c) => <QrCode size={22} color={c} /> });
   if (!pm || pm.creditCardOnline) opts.push({ method: 'card_online', label: 'Cartão de crédito (online)', hint: 'Pague agora pelo app', icon: (c) => <CreditCard size={22} color={c} /> });
-  // Carteiras BR habilitadas no servidor de pagamentos (GET /config).
-  if (wallets?.picpay) opts.push({ method: 'picpay', label: 'PicPay', hint: 'Pague pelo app do PicPay', icon: (c) => <Wallet size={22} color={c} /> });
-  if (wallets?.nupay) opts.push({ method: 'nupay', label: 'NuPay (Nubank)', hint: 'Pague pelo app do Nubank', icon: (c) => <Wallet size={22} color={c} /> });
   if (!pm || pm.creditCardDelivery || pm.debitCardDelivery)
     opts.push({ method: 'card_delivery', label: 'Cartão na entrega', hint: 'Crédito ou débito na maquininha', icon: (c) => <CreditCard size={22} color={c} /> });
   opts.push({ method: 'cash_delivery', label: 'Dinheiro na entrega', hint: 'Informe o troco', icon: (c) => <Banknote size={22} color={c} /> });
