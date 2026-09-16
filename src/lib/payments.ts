@@ -4,8 +4,6 @@ import type { PaymentMethod } from './types';
 export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   pix: 'PIX',
   card_online: 'Cartão de crédito (online)',
-  picpay: 'PicPay',
-  nupay: 'NuPay (Nubank)',
   card_delivery: 'Cartão na entrega',
   cash_delivery: 'Dinheiro na entrega',
   voucher_delivery: 'Vale-refeição na entrega',
@@ -14,8 +12,6 @@ export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
 export const PAYMENT_SHORT: Record<PaymentMethod, string> = {
   pix: 'PIX',
   card_online: 'Cartão online',
-  picpay: 'PicPay',
-  nupay: 'NuPay',
   card_delivery: 'Cartão na entrega',
   cash_delivery: 'Dinheiro',
   voucher_delivery: 'Vale',
@@ -51,42 +47,22 @@ export function last4(raw: string): string {
   return n.slice(-4);
 }
 
-export interface CardToken {
-  token: string;
-  brand: string;
-  last4: string;
-}
-
+/* ===================== Servidor de pagamentos (Pagar.me) ===================== */
 /**
- * Tokenize a card — DEMO fallback only, used when the Stripe payments server
- * (EXPO_PUBLIC_PAYMENTS_API_URL) is not configured. With Stripe the card data
- * is typed directly on the Stripe Checkout page and never touches our code
- * (RNF10).
- */
-export async function tokenizeCard(card: { number: string; cvv: string; expiry: string }): Promise<CardToken> {
-  await new Promise((r) => setTimeout(r, 600));
-  const digits = card.number.replace(/\D/g, '');
-  if (digits.length < 13) throw new Error('Número de cartão inválido.');
-  return {
-    token: `tok_${Math.random().toString(36).slice(2, 14)}`,
-    brand: cardBrand(card.number),
-    last4: last4(card.number),
-  };
-}
-
-/* ===================== Stripe (servidor de pagamentos) ===================== */
-/**
- * Os apps NUNCA falam com a Stripe usando a chave secreta: todo pagamento
+ * Os apps NUNCA falam com a Pagar.me usando a chave secreta: todo pagamento
  * online passa pelo servidor de pagamentos da plataforma (repo
  * nexmarket--Empresa, pasta server/), que valida o token Firebase do usuário
- * e cria as cobranças. Aqui só existe o client HTTP desse servidor.
+ * e cria os pedidos/cobranças com split para a loja. O único contato direto
+ * com a Pagar.me é a tokenização do cartão (chave PÚBLICA, ver
+ * `tokenizeCard` abaixo) — o número do cartão nunca passa pelo nosso servidor
+ * (RNF10).
  */
 
 export function paymentsApiUrl(): string {
   return (process.env.EXPO_PUBLIC_PAYMENTS_API_URL || '').trim().replace(/\/$/, '');
 }
 
-/** Whether real (Stripe) payments are configured; otherwise the demo flow runs. */
+/** Whether real (Pagar.me) payments are configured; otherwise the demo flow runs. */
 export function paymentsConfigured(): boolean {
   return paymentsApiUrl().length > 0;
 }
@@ -108,85 +84,28 @@ async function api<T>(path: string, init?: RequestInit & { query?: Record<string
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err: any = new Error(body?.error || `Falha no servidor de pagamentos (${res.status}).`);
-    err.pixUnavailable = !!body?.pixUnavailable;
     err.status = res.status;
+    err.needsReview = res.status === 422;
     throw err;
   }
   return body as T;
 }
 
-export interface CheckoutSession {
-  url: string;
-  sessionId: string;
-  amount: number;
-}
-
-/** Stripe Checkout (cartão): retorna a URL hospedada para abrir no navegador. */
-export function createCheckoutSession(input: {
-  smId: string;
-  orderId: string;
-  amount: number;
-  storeName?: string;
-  next?: string;
-  /** Salvar o cartão no Customer da Stripe para pagar em 1 toque depois. */
-  saveCard?: boolean;
-}): Promise<CheckoutSession> {
-  return api<CheckoutSession>('/api/payments/checkout-session', {
-    method: 'POST',
-    body: JSON.stringify(input),
-  });
-}
-
-export interface PixPayment {
-  paymentIntentId: string;
-  status: string;
-  amount: number;
-  qrData: string | null;
-  qrImageUrl: string | null;
-  hostedUrl: string | null;
-  expiresAt: number | null;
-}
-
-/** PIX real via Stripe: QR code + copia-e-cola. Lança erro com
- * `pixUnavailable=true` se o método não estiver ativado na conta Stripe. */
-export function createPixPayment(input: { smId: string; orderId: string; amount: number }): Promise<PixPayment> {
-  return api<PixPayment>('/api/payments/pix-intent', {
-    method: 'POST',
-    body: JSON.stringify(input),
-  });
-}
-
-export interface PaymentStatus {
-  status: string;
-  paid: boolean;
-  paymentIntentId: string | null;
-}
-
-export function getPaymentStatus(input: {
-  sessionId?: string;
-  paymentIntentId?: string;
-  smId: string;
-  orderId: string;
-}): Promise<PaymentStatus> {
-  const query: Record<string, string> = { smId: input.smId, orderId: input.orderId };
-  if (input.sessionId) query.sessionId = input.sessionId;
-  if (input.paymentIntentId) query.paymentIntentId = input.paymentIntentId;
-  return api<PaymentStatus>('/api/payments/status', { query });
-}
-
 /* ------------------------ Config pública do gateway ----------------------- */
 
 export interface GatewayPublicConfig {
-  publishableKey?: string;
+  publicKey?: string;
+  tokenEndpoint?: string;
   currency?: string;
-  /** Carteiras extras habilitadas no servidor (PicPay/NuPay). */
-  wallets?: { picpay?: boolean; nupay?: boolean };
+  provider?: string;
+  paymentsEnabled?: boolean;
+  minOrderBRL?: number;
 }
 
 let gwConfig: GatewayPublicConfig | null = null;
 let gwConfigAt = 0;
 
-/** GET /config (público, cache 5 min) — decide quais opções o checkout mostra. */
+/** GET /config (público, cache 5 min) — chave pública + endpoint de tokenização. */
 export async function getGatewayConfig(): Promise<GatewayPublicConfig> {
   const base = paymentsApiUrl();
   if (!base) return {};
@@ -201,68 +120,114 @@ export async function getGatewayConfig(): Promise<GatewayPublicConfig> {
   return gwConfig || {};
 }
 
-/* -------------------- Carteiras BR: PicPay e NuPay ------------------------- */
+/* --------------------- Tokenização de cartão (Pagar.me) -------------------- */
 
-export type WalletProvider = 'picpay' | 'nupay';
+export interface CardToken {
+  token: string;
+  brand: string;
+  last4: string;
+}
 
-export interface WalletCharge {
-  provider: WalletProvider;
-  paymentUrl: string | null;
-  qrContent: string | null;
-  qrBase64: string | null;
+/**
+ * Tokeniza o cartão diretamente com a Pagar.me usando a chave PÚBLICA (nunca
+ * a secreta) — o número/CVV são enviados apenas para `tokenEndpoint` e o
+ * servidor de pagamentos só recebe o token de volta. Sem servidor de
+ * pagamentos configurado cai no modo demonstração (não cobra de verdade).
+ */
+export async function tokenizeCard(card: {
+  number: string;
+  cvv: string;
+  expiry: string; // MM/AA
+  holderName: string;
+}): Promise<CardToken> {
+  const digits = card.number.replace(/\D/g, '');
+  if (digits.length < 13) throw new Error('Número de cartão inválido.');
+  const [mm, yy] = card.expiry.split('/');
+  if (!mm || !yy || mm.length !== 2 || yy.length < 2) throw new Error('Validade do cartão inválida.');
+
+  const { publicKey, tokenEndpoint } = await getGatewayConfig();
+  if (!paymentsConfigured() || !publicKey || !tokenEndpoint) {
+    // Modo demonstração — nenhuma cobrança real será feita.
+    await new Promise((r) => setTimeout(r, 500));
+    return { token: `demo_${Math.random().toString(36).slice(2, 14)}`, brand: cardBrand(card.number), last4: last4(card.number) };
+  }
+
+  const res = await fetch(`${tokenEndpoint}?appId=${encodeURIComponent(publicKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'card',
+      card: {
+        number: digits,
+        holder_name: card.holderName,
+        exp_month: mm,
+        exp_year: yy.length === 2 ? `20${yy}` : yy,
+        cvv: card.cvv,
+      },
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body?.message || 'Não foi possível validar o cartão. Confira os dados e tente novamente.');
+  }
+  return {
+    token: body.id,
+    brand: body.card?.brand || cardBrand(card.number),
+    last4: body.card?.last_four_digits || last4(card.number),
+  };
+}
+
+/* --------------------------------- Checkout -------------------------------- */
+
+export interface PixInfo {
+  qrData: string | null;
+  qrImageUrl: string | null;
   expiresAt: string | null;
 }
 
-/** Cria a cobrança na carteira (PicPay exige CPF do comprador). */
-export async function createWalletPayment(
-  provider: WalletProvider,
-  input: {
-    smId: string;
-    orderId: string;
-    amount: number;
-    buyer?: { firstName?: string; lastName?: string; document?: string; email?: string; phone?: string };
-  },
-): Promise<WalletCharge> {
-  try {
-    return await api<WalletCharge>(`/api/payments/wallet/${provider}`, {
-      method: 'POST',
-      body: JSON.stringify(input),
-    });
-  } catch (e: any) {
-    e.cpfRequired = e?.status === 400 && /CPF/i.test(e?.message || '');
-    e.walletUnavailable = e?.status === 501;
-    throw e;
-  }
+export interface CheckoutResult {
+  ok: boolean;
+  status: 'paid' | 'failed' | 'pending';
+  pagarmeOrderId: string;
+  chargeId: string | null;
+  amount: number;
+  pix?: PixInfo;
 }
 
-export function getWalletStatus(
-  provider: WalletProvider,
-  input: { smId: string; orderId: string },
-): Promise<{ status: string; paid: boolean }> {
-  return api(`/api/payments/wallet/${provider}/status`, {
-    query: { smId: input.smId, orderId: input.orderId },
+/**
+ * Cobra um pedido (kind='order') ou uma gorjeta avulsa (kind='tip') via
+ * Pagar.me. Cartão: `cardToken` (de `tokenizeCard`) ou `cardId` de um cartão
+ * salvo. PIX: devolve QR code + copia-e-cola, a confirmação chega por
+ * polling em `getPaymentStatus` (o webhook do servidor também concilia).
+ */
+export function checkout(input: {
+  smId: string;
+  orderId: string;
+  paymentMethod: 'card' | 'pix';
+  cardToken?: string;
+  cardId?: string;
+  installments?: number;
+  saveCard?: boolean;
+  kind?: 'order' | 'tip';
+  amount?: number;
+  driverName?: string;
+}): Promise<CheckoutResult> {
+  return api<CheckoutResult>('/api/payments/checkout', {
+    method: 'POST',
+    body: JSON.stringify(input),
   });
 }
 
-/* ------------------- Apple Pay / Google Pay (in-app) ------------------- */
-
-export interface NativePayIntent {
-  clientSecret: string;
-  paymentIntentId: string;
-  publishableKey: string;
-  amount: number;
-  testEnv: boolean;
+export interface PaymentStatus {
+  status: 'paid' | 'failed' | 'pending';
+  paid: boolean;
+  pagarmeOrderId: string;
+  chargeId: string | null;
 }
 
-/** PaymentIntent para confirmar com a carteira nativa (PlatformPay). */
-export function createPaymentIntent(input: {
-  smId: string;
-  orderId: string;
-  amount: number;
-}): Promise<NativePayIntent> {
-  return api<NativePayIntent>('/api/payments/payment-intent', {
-    method: 'POST',
-    body: JSON.stringify(input),
+export function getPaymentStatus(input: { pagarmeOrderId: string; smId: string; orderId: string }): Promise<PaymentStatus> {
+  return api<PaymentStatus>('/api/payments/status', {
+    query: { pagarmeOrderId: input.pagarmeOrderId, smId: input.smId, orderId: input.orderId },
   });
 }
 
@@ -283,47 +248,6 @@ export async function getSavedMethods(): Promise<SavedCard[]> {
 
 export function deleteSavedMethod(id: string): Promise<{ ok: boolean }> {
   return api(`/api/payments/saved-methods/${id}`, { method: 'DELETE' });
-}
-
-export interface ChargeResult {
-  ok: boolean;
-  status: string;
-  paymentIntentId: string;
-  amount: number;
-}
-
-/** Pagamento em 1 toque com cartão salvo. Lança erro com `requiresAction=true`
- * quando o cartão exige 3DS — aí o app cai para o Stripe Checkout. */
-export async function chargeSaved(input: {
-  smId: string;
-  orderId: string;
-  amount: number;
-  paymentMethodId: string;
-  kind?: 'order' | 'tip';
-}): Promise<ChargeResult> {
-  try {
-    return await api<ChargeResult>('/api/payments/charge-saved', {
-      method: 'POST',
-      body: JSON.stringify(input),
-    });
-  } catch (e: any) {
-    if (e?.status === 402) e.requiresAction = true;
-    throw e;
-  }
-}
-
-/** Gorjeta pós-entrega via Stripe Checkout (sem cartão salvo). */
-export function createTipCheckout(input: {
-  smId: string;
-  orderId: string;
-  amount: number;
-  driverName?: string;
-  next?: string;
-}): Promise<CheckoutSession> {
-  return api<CheckoutSession>('/api/payments/tip-checkout', {
-    method: 'POST',
-    body: JSON.stringify(input),
-  });
 }
 
 /* --------------------- Reembolso self-service por item --------------------- */

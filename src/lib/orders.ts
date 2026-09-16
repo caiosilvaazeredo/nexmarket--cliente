@@ -12,6 +12,7 @@ import {
   increment,
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
+import { MIN_ORDER_BRL, calcServiceFee, meetsMinimumOrder } from './fees';
 import type {
   Order,
   OrderItem,
@@ -182,10 +183,24 @@ function genId(): string {
  * Create an order tied to the authenticated customer's uid (RNF11). Pickup
  * orders skip the driver pool; delivery orders enter it once the store marks
  * the order "ready".
+ *
+ * A taxa de serviço (regras comerciais da fase piloto — ver
+ * server/lib/fees.js no repo nexmarket--Empresa) é recalculada aqui a partir
+ * do subtotal só para ficar gravada no pedido — o checkout (app/checkout.tsx)
+ * já soma o mesmo valor (mesma fórmula, ver src/lib/fees.ts) em `input.total`
+ * antes de chamar esta função, então `total` não é alterado aqui. O pedido
+ * mínimo (R$40) também é validado aqui.
  */
 export async function placeOrder(input: PlaceOrderInput): Promise<string> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error('É necessário estar logado para finalizar o pedido.');
+
+  if (!meetsMinimumOrder(input.subtotal)) {
+    throw new Error(`O pedido mínimo é de ${MIN_ORDER_BRL.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}.`);
+  }
+
+  const serviceFee = calcServiceFee(input.subtotal);
+  const total = Number(input.total.toFixed(2));
 
   const id = genId();
   const isDelivery = input.fulfillment === 'delivery';
@@ -206,8 +221,9 @@ export async function placeOrder(input: PlaceOrderInput): Promise<string> {
     })),
     subtotal: input.subtotal,
     deliveryFee: input.deliveryFee,
+    serviceFee,
     discount: input.discount,
-    total: input.total,
+    total,
     couponCode: input.couponCode || '',
     fulfillment: input.fulfillment,
     paymentMethod: input.paymentMethod,
@@ -279,7 +295,7 @@ export async function respondToSubstitutions(
     const price = it.substituted && typeof it.substitutePrice === 'number' ? it.substitutePrice : it.price;
     return acc + price * it.quantity;
   }, 0);
-  const total = newSubtotal + (order.deliveryFee || 0) - (order.discount || 0);
+  const total = newSubtotal + (order.deliveryFee || 0) + (order.serviceFee || 0) - (order.discount || 0);
 
   await updateDoc(doc(db, `supermarkets/${order.supermarketId}/orders/${order.id}`), {
     items,
@@ -297,21 +313,20 @@ export async function cancelOrder(order: Order): Promise<void> {
 }
 
 /**
- * Confirm an online/PIX payment. With Stripe the webhook do servidor também
- * grava este status; a escrita aqui garante o funcionamento mesmo sem
- * service account no servidor (RNF10 — nunca gravamos dados de cartão).
+ * Confirm an online/PIX payment. O webhook do servidor (Pagar.me) também
+ * grava este status; a escrita aqui garante o funcionamento mesmo com atraso
+ * de webhook (RNF10 — nunca gravamos dados de cartão).
  */
 export async function markPaid(
   order: Order,
-  info?: { paymentIntentId?: string; checkoutSessionId?: string; provider?: string },
+  info?: { paymentIntentId?: string; provider?: string },
 ): Promise<void> {
   await updateDoc(doc(db, `supermarkets/${order.supermarketId}/orders/${order.id}`), {
     paymentStatus: 'paid',
     payment: {
-      provider: info?.provider || (info?.paymentIntentId || info?.checkoutSessionId ? 'stripe' : 'demo'),
+      provider: info?.provider || (info?.paymentIntentId ? 'pagarme' : 'demo'),
       status: 'paid',
       ...(info?.paymentIntentId ? { paymentIntentId: info.paymentIntentId } : {}),
-      ...(info?.checkoutSessionId ? { checkoutSessionId: info.checkoutSessionId } : {}),
       paidAt: new Date().toISOString(),
     },
     updatedAt: serverTimestamp(),

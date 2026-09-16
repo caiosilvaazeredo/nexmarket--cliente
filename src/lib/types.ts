@@ -236,17 +236,15 @@ export type FulfillmentType = 'delivery' | 'pickup';
 export type PaymentMethod =
   | 'pix'
   | 'card_online'
-  | 'picpay'
-  | 'nupay'
   | 'card_delivery'
   | 'cash_delivery'
   | 'voucher_delivery';
 
 export interface PaymentInfo {
-  provider?: 'stripe' | string;
+  provider?: 'pagarme' | string;
   status?: 'pending' | 'paid' | 'failed' | 'refunded';
   paymentIntentId?: string;
-  checkoutSessionId?: string;
+  chargeId?: string;
   refundedAmount?: number;
   refundReason?: string;
   /** Reembolso automático self-service já utilizado neste pedido. */
@@ -265,13 +263,15 @@ export interface Order {
 
   subtotal?: number;
   deliveryFee?: number;
+  /** Taxa de serviço da plataforma (regras comerciais da fase piloto). */
+  serviceFee?: number;
   discount?: number;
   couponCode?: string;
 
   fulfillment?: FulfillmentType;
   paymentMethod?: PaymentMethod;
   paymentStatus?: 'pending' | 'paid' | 'failed' | 'refunded';
-  /** Detalhes do pagamento online (Stripe) — nunca contém dados de cartão. */
+  /** Detalhes do pagamento online (Pagar.me) — nunca contém dados de cartão. */
   payment?: PaymentInfo;
   /** Gorjeta do entregador (checkout + pós-entrega). 100% vai para ele. */
   tip?: number;
