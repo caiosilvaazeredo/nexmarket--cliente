@@ -214,6 +214,17 @@ export default function OrderScreen() {
           <OrderStatusTracker order={order} />
         </Card>
 
+        {/* Foto da sacola fechada, tirada pela loja ao concluir a separação */}
+        {order.pickingPhotoUrl ? (
+          <Card style={{ gap: spacing.sm }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Package size={18} color={colors.primary} />
+              <Text style={{ color: colors.text, fontWeight: font.black }}>Sua sacola foi fechada assim</Text>
+            </View>
+            <Image source={{ uri: order.pickingPhotoUrl }} style={{ width: '100%', height: 200, borderRadius: radius.lg }} resizeMode="cover" />
+          </Card>
+        ) : null}
+
         {/* Cancelled / problem messaging */}
         {cancelled ? (
           <View style={{ backgroundColor: colors.dangerSoft, borderRadius: radius.lg, padding: spacing.md, gap: 4 }}>
@@ -420,7 +431,7 @@ function SubstitutionModal({ visible, order, colors, onClose }: { visible: boole
 
   const allDecided = pendingItems.every(({ idx }) => decisions[idx]);
 
-  const confirm = async () => {
+  const confirmDecisions = async () => {
     setBusy(true);
     try {
       await respondToSubstitutions(order, decisions);
@@ -431,6 +442,35 @@ function SubstitutionModal({ visible, order, colors, onClose }: { visible: boole
     } finally {
       setBusy(false);
     }
+  };
+
+  /** Terceira opção do fluxo de item em falta: cancelar o pedido inteiro,
+   * usada quando o item faltante é essencial e nem o substituto nem a
+   * remoção resolvem. */
+  const cancelWholeOrder = () => {
+    Alert.alert(
+      'Cancelar pedido',
+      'O pedido inteiro será cancelado por causa do item em falta. Esta ação não pode ser desfeita.',
+      [
+        { text: 'Voltar', style: 'cancel' },
+        {
+          text: 'Cancelar pedido',
+          style: 'destructive',
+          onPress: async () => {
+            setBusy(true);
+            try {
+              await cancelOrder(order);
+              successHaptic();
+              onClose();
+            } catch {
+              Alert.alert('Erro', 'Não foi possível cancelar o pedido.');
+            } finally {
+              setBusy(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -470,9 +510,10 @@ function SubstitutionModal({ visible, order, colors, onClose }: { visible: boole
                 </View>
               </View>
             ))}
-            <Button label="Confirmar respostas" size="lg" loading={busy} disabled={!allDecided} onPress={confirm} />
+            <Button label="Confirmar respostas" size="lg" loading={busy} disabled={!allDecided} onPress={confirmDecisions} />
+            <Button label="Cancelar pedido inteiro" variant="ghost" loading={busy} onPress={cancelWholeOrder} />
             <Text style={{ color: colors.textSubtle, fontSize: fontSize.xs, textAlign: 'center' }}>
-              Se você não responder a tempo, a loja pode remover o item automaticamente para não atrasar sua entrega.
+              Se você não responder em até 10 minutos, o item é removido automaticamente com desconto para não atrasar sua entrega.
             </Text>
           </ScrollView>
         </View>

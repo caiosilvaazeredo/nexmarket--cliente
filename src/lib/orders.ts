@@ -281,9 +281,18 @@ export async function respondToSubstitutions(
   }, 0);
   const total = newSubtotal + (order.deliveryFee || 0) - (order.discount || 0);
 
+  // Separação já tinha terminado antes de perguntar ao cliente (o item em
+  // falta só bloqueia a si mesmo, não o resto do checklist) — assim que a
+  // última decisão pendente é respondida, o pedido pode seguir para o
+  // entregador.
+  const stillPending = items.some(
+    (it) => (it.missing || it.substituted) && (!it.customerDecision || it.customerDecision === 'pending'),
+  );
+
   await updateDoc(doc(db, `supermarkets/${order.supermarketId}/orders/${order.id}`), {
     items,
     total: Math.max(0, total),
+    ...(stillPending ? {} : { status: 'ready' }),
     updatedAt: serverTimestamp(),
   });
 }
