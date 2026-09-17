@@ -192,6 +192,9 @@ export interface OrderItem {
   substitutePrice?: number;
   /** Customer's decision on a suggested substitution (cliente app). */
   customerDecision?: 'pending' | 'accepted' | 'rejected';
+  /** Epoch ms de quando a loja marcou o item em falta — usado para expirar a
+   * decisão do cliente após 10 minutos (regra padrão: remover com desconto). */
+  missingAt?: number;
   /** Item reportado com problema pelo cliente (fluxo de reembolso). */
   reported?: boolean;
 }
@@ -302,6 +305,9 @@ export interface Order {
   acceptedAt?: any;
   pickedUpAt?: any;
   deliveredAt?: any;
+  /** Foto da sacola fechada, tirada pela loja ao final da separação. */
+  pickingPhotoUrl?: string;
+  pickingCompletedAt?: any;
   proofOfDelivery?: {
     signatureUrl?: string;
     photoUrl?: string;
